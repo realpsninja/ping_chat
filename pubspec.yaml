@@ -1,0 +1,24 @@
+name: pingchat
+description: E2EE Messenger with auto-delete
+publish_to: 'none'
+version: 1.9.1+3
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.1.0
+  socket_io_client: ^2.0.3
+  shared_preferences: ^2.2.2
+  pointycastle: ^3.9.1
+  encrypt: ^5.0.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
