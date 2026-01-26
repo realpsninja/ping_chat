@@ -15,6 +15,7 @@ Fully open‑source, including the backend.
     – AES‑CBC for message encryption
     – Keys serialized in hex format
     – FortunaRandom for secure key generation
+
 * No personal data
     – No phone numbers, emails, or usernames required
     – Registration via PIN‑only
@@ -23,8 +24,8 @@ Fully open‑source, including the backend.
 ##### Auto‑Deletion
 
 * Entire chat is automatically deleted 10 minutes after the first message
-* Timer runs independently of online/offline status
-* Complete removal from the server
+    — Timer runs independently of online/offline status
+    — Complete removal from the server
 
 #####  Core Functionality
 
