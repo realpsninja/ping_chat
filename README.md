@@ -20,19 +20,19 @@ Fully open‑source, including the backend.
     – Registration via PIN‑only
     – Auto‑generated anonymous nicknames
 
-* Auto‑Deletion
+##### Auto‑Deletion
 
-· Entire chat is automatically deleted 10 minutes after the first message
-· Timer runs independently of online/offline status
-· Complete removal from the server
+* Entire chat is automatically deleted 10 minutes after the first message
+* Timer runs independently of online/offline status
+* Complete removal from the server
 
-*  Core Functionality
+#####  Core Functionality
 
-· PIN‑based registration & login
-· Search for other users
-· Real‑time chat list
-· E2EE messaging over WebSocket
-· Lightweight and fast UI
+* PIN‑based registration & login
+* Search for other users
+* Real‑time chat list
+* E2EE messaging over WebSocket
+* Lightweight and fast UI
 
 ---
 
