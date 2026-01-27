@@ -66,7 +66,8 @@ class _ChatScreenState extends State<ChatScreen> {
       });
 
       if (_messages.isNotEmpty) {
-        _firstMessageTime = DateTime.parse(_messages.first['timestamp']);
+        // Используем timestamp самого старого сообщения для автоудаления
+        _firstMessageTime = DateTime.parse(_messages.last['timestamp']);
       }
 
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -94,11 +95,16 @@ class _ChatScreenState extends State<ChatScreen> {
         return;
       }
 
-      setState(() {
-        _messages.removeWhere((m) => m['is_local'] == true);
-        _messages.add(data);
-        _firstMessageTime ??= DateTime.now();
-      });
+      // Если это новое сообщение, добавляем его
+      if (data['id'] != null) {
+        // Проверяем, нет ли уже такого сообщения (чтобы избежать дубликатов)
+        if (!_messages.any((m) => m['id'] == data['id'])) {
+          setState(() {
+            _messages.add(data);
+            _firstMessageTime ??= DateTime.now();
+          });
+        }
+      }
 
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _scrollToBottom();
@@ -108,12 +114,37 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _startAutoDeleteTimer() {
     _autoDeleteTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
-      if (_firstMessageTime == null) return;
+      if (_firstMessageTime == null || _messages.isEmpty) return;
 
-      if (DateTime.now().difference(_firstMessageTime!).inMinutes >= 10) {
-        await ApiService().deleteChat(widget.chatId);
-        if (!mounted) return;
-        Navigator.pop(context);
+      final now = DateTime.now();
+      final minutesSinceFirstMessage = now.difference(_firstMessageTime!).inMinutes;
+      
+      // Если прошло 10 минут, удаляем ВСЕ сообщения в этом чате
+      if (minutesSinceFirstMessage >= 10) {
+        try {
+          // Удаляем все сообщения по одному с сервера
+          for (final message in _messages) {
+            if (message['id'] is int && message['id'] > 0) {
+              try {
+                await ApiService().deleteMessage(message['id']);
+              } catch (e) {
+                print('Failed to delete message ${message['id']}: $e');
+              }
+            }
+          }
+          
+          // Очищаем локальный список сообщений
+          setState(() {
+            _messages.clear();
+            _decryptedCache.clear();
+            _firstMessageTime = null;
+          });
+          
+          // Уведомляем через сокет, что сообщения удалены
+          // (опционально, если сервер поддерживает)
+        } catch (e) {
+          print('Auto-delete error: $e');
+        }
       }
     });
   }
@@ -151,9 +182,10 @@ class _ChatScreenState extends State<ChatScreen> {
       });
 
       // ✅ OPTIMISTIC UI
+      final localMessageId = -DateTime.now().millisecondsSinceEpoch;
       setState(() {
         _messages.add({
-          'id': -DateTime.now().millisecondsSinceEpoch,
+          'id': localMessageId,
           'chat_id': widget.chatId,
           'sender_id': _myUserId,
           'content': content,
@@ -161,18 +193,31 @@ class _ChatScreenState extends State<ChatScreen> {
             (k, v) => MapEntry(k.toString(), v),
           ),
           'is_local': true,
+          'timestamp': DateTime.now().toIso8601String(),
         });
+        
+        // Обновляем время первого сообщения при отправке первого сообщения
+        if (_firstMessageTime == null) {
+          _firstMessageTime = DateTime.now();
+        }
       });
 
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _scrollToBottom();
       });
 
+      // Отправляем через сокет
+      final keysAsString = encryptedKeys.map((k, v) => MapEntry(k.toString(), v));
       SocketService().sendMessage(
         widget.chatId,
         content,
-        encryptedKeys,
+        Map<int, String>.from(encryptedKeys),
       );
+
+      // После отправки обновляем список сообщений
+      await Future.delayed(const Duration(milliseconds: 500));
+      await _loadMessages();
+      
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -206,6 +251,11 @@ class _ChatScreenState extends State<ChatScreen> {
       final content = jsonDecode(message['content']);
       final keys = Map<String, dynamic>.from(message['encrypted_keys']);
       final myKey = keys[_myUserId.toString()];
+      
+      if (myKey == null) {
+        return '[Encrypted for other user]';
+      }
+      
       final aesKey = CryptoService().decryptAESKey(myKey);
 
       final decrypted = _decryptWithAES(
@@ -217,6 +267,7 @@ class _ChatScreenState extends State<ChatScreen> {
       _decryptedCache[id] = decrypted;
       return decrypted;
     } catch (e) {
+      print('Decryption error: $e');
       return '[Decryption failed]';
     }
   }
@@ -254,9 +305,9 @@ class _ChatScreenState extends State<ChatScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(widget.partnerNickname, style: const TextStyle(color: Colors.white)),
-            if (_firstMessageTime != null)
+            if (_firstMessageTime != null && _messages.isNotEmpty)
               Text(
-                'Авто удаление каждые ${10 - DateTime.now().difference(_firstMessageTime!).inMinutes}мин.',
+                'Авто удаление через ${10 - DateTime.now().difference(_firstMessageTime!).inMinutes}мин.',
                 style: const TextStyle(fontSize: 12, color: Colors.white70),
               ),
           ],
@@ -273,7 +324,6 @@ class _ChatScreenState extends State<ChatScreen> {
                     : ListView.builder(
                         controller: _scrollController,
                         itemCount: _messages.length,
-                        // Оптимизация: не пересоздавать виджеты
                         addAutomaticKeepAlives: true,
                         cacheExtent: 1000,
                         itemBuilder: (context, index) {
@@ -298,11 +348,24 @@ class _ChatScreenState extends State<ChatScreen> {
                                     : const Color(0xFF474747), // Сообщение партнера
                                 borderRadius: BorderRadius.circular(12),
                               ),
-                              child: Text(
-                                decrypted,
-                                style: TextStyle(
-                                  color: isMine ? Colors.white : Colors.white,
-                                ),
+                              child: Column(
+                                crossAxisAlignment: isMine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    decrypted,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    _formatTime(msg['timestamp']),
+                                    style: const TextStyle(
+                                      fontSize: 10,
+                                      color: Colors.white70,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
                           );
@@ -310,10 +373,10 @@ class _ChatScreenState extends State<ChatScreen> {
                       ),
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(10, 0, 10, 10), // 10px с боков, 10px снизу
+            padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
             child: Container(
               decoration: BoxDecoration(
-                color: const Color(0xFF2f2f2f), // Фон поля ввода
+                color: const Color(0xFF2f2f2f),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Row(
@@ -321,8 +384,8 @@ class _ChatScreenState extends State<ChatScreen> {
                   Expanded(
                     child: TextField(
                       controller: _messageController,
-                      maxLines: 6, // Растягивается до 6 строк
-                      minLines: 1, // Минимум 1 строка
+                      maxLines: 6,
+                      minLines: 1,
                       decoration: const InputDecoration(
                         hintText: 'Введите сообщение...',
                         hintStyle: TextStyle(color: Colors.white70),
@@ -347,5 +410,17 @@ class _ChatScreenState extends State<ChatScreen> {
         ],
       ),
     );
+  }
+  
+  String _formatTime(String? timestamp) {
+    if (timestamp == null) return '';
+    final dt = DateTime.parse(timestamp);
+    final now = DateTime.now();
+    final diff = now.difference(dt);
+    
+    if (diff.inMinutes < 1) return 'now';
+    if (diff.inHours < 1) return '${diff.inMinutes}m ago';
+    if (diff.inDays < 1) return '${diff.inHours}h ago';
+    return '${diff.inDays}d ago';
   }
 }

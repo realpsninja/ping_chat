@@ -107,4 +107,15 @@ class ApiService {
       headers: _headers,
     );
   }
+
+  // Новый метод для очистки всех сообщений в чате
+  Future<void> clearChatMessages(int chatId) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/api/chats/$chatId/clear'),
+      headers: _headers,
+    );
+    if (res.statusCode != 200) {
+      throw Exception('Failed to clear chat messages');
+    }
+  }
 }

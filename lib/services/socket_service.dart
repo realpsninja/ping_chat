@@ -9,11 +9,11 @@ class SocketService {
   IO.Socket? _socket;
   final _messageController = StreamController<Map<String, dynamic>>.broadcast();
   final _statusController = StreamController<Map<String, dynamic>>.broadcast();
-  final _chatUpdateController = StreamController<Map<String, dynamic>>.broadcast(); // ← НОВОЕ
+  final _chatUpdateController = StreamController<Map<String, dynamic>>.broadcast();
 
   Stream<Map<String, dynamic>> get messageStream => _messageController.stream;
   Stream<Map<String, dynamic>> get statusStream => _statusController.stream;
-  Stream<Map<String, dynamic>> get chatUpdateStream => _chatUpdateController.stream; // ← НОВОЕ
+  Stream<Map<String, dynamic>> get chatUpdateStream => _chatUpdateController.stream;
 
   void connect(String token) {
     _socket = IO.io(
@@ -31,22 +31,34 @@ class SocketService {
     _socket!.onError((err) => print('Socket error: $err'));
 
     _socket!.on('new_message', (data) {
+      print('Received new_message: $data');
       final message = Map<String, dynamic>.from(data);
       _messageController.add(message);
-      _chatUpdateController.add({'type': 'new_message', 'data': message}); // ← НОВОЕ
+      _chatUpdateController.add({'type': 'new_message', 'data': message});
     });
 
     _socket!.on('message_deleted', (data) {
+      print('Received message_deleted: $data');
       _messageController.add({
         'type': 'deleted',
         'messageId': data['messageId'],
         'chatId': data['chatId'],
       });
-      _chatUpdateController.add({'type': 'message_deleted', 'data': data}); // ← НОВОЕ
+      _chatUpdateController.add({'type': 'message_deleted', 'data': data});
     });
 
     _socket!.on('user_status_changed', (data) {
+      print('Received user_status_changed: $data');
       _statusController.add(Map<String, dynamic>.from(data));
+    });
+
+    // Добавляем обработку для очистки сообщений
+    _socket!.on('messages_cleared', (data) {
+      print('Received messages_cleared: $data');
+      _messageController.add({
+        'type': 'cleared',
+        'chatId': data['chatId'],
+      });
     });
   }
 
@@ -56,11 +68,14 @@ class SocketService {
       keysAsString[key.toString()] = value;
     });
 
-    _socket?.emit('send_message', {
+    final messageData = {
       'chatId': chatId,
       'content': encryptedContent,
       'encryptedKeys': keysAsString,
-    });
+    };
+
+    print('Sending message: $messageData');
+    _socket?.emit('send_message', messageData);
   }
 
   void disconnect() {
