@@ -136,6 +136,11 @@ CREATE TABLE messages (
 );
 ```
 
+-- Добавляем колонку read_at в таблицу messages
+'''
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS read_at TIMESTAMP WITH TIME ZONE;
+'''
+
 ##### Create triggers
 
 ```
@@ -179,8 +184,13 @@ CREATE INDEX idx_chats_user2 ON chats(user2_id);
 CREATE INDEX idx_messages_chat ON messages(chat_id);
 CREATE INDEX idx_messages_sender ON messages(sender_id);
 CREATE INDEX idx_messages_timestamp ON messages(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_messages_read_at ON messages(chat_id, sender_id, read_at) WHERE read_at IS NULL;
 ```
 
+-- Обновляем существующие сообщения, помечаем их как прочитанные
+'''
+UPDATE messages SET read_at = timestamp WHERE read_at IS NULL;
+'''
 
 ##### Create a user for database
 
