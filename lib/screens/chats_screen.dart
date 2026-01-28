@@ -271,7 +271,15 @@ class _ChatsScreenState extends State<ChatsScreen> {
     return '';
   }
 
+  void _closeSwipe(int chatId) {
+    setState(() {
+      _isSwiped.remove(chatId);
+    });
+  }
+
   Future<void> _deleteChat(dynamic chat) async {
+    _closeSwipe(chat['id']);
+    
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -305,6 +313,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
           _chats.removeWhere((c) => c['id'] == chat['id']);
         });
         
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Чат с ${chat['partner_nickname']} удален'),
@@ -312,6 +321,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
           ),
         );
       } catch (e) {
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Ошибка удаления: $e'),
@@ -323,6 +333,8 @@ class _ChatsScreenState extends State<ChatsScreen> {
   }
 
   Future<void> _clearChat(dynamic chat) async {
+    _closeSwipe(chat['id']);
+    
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -361,6 +373,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
           }
         });
         
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Чат с ${chat['partner_nickname']} очищен'),
@@ -368,6 +381,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
           ),
         );
       } catch (e) {
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Ошибка очистки: $e'),
@@ -380,282 +394,299 @@ class _ChatsScreenState extends State<ChatsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF1c1c1c),
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF202020),
-        title: Text(
-          _nickname ?? 'Чаты',
-          style: const TextStyle(color: Colors.white),
-        ),
-        actions: [
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert, color: Colors.white),
-            onSelected: (value) {
-              if (value == 'logout') {
-                _logout();
-              }
-            },
-            itemBuilder: (BuildContext context) {
-              return [
-                const PopupMenuItem<String>(
-                  value: 'logout',
-                  child: Row(
-                    children: [
-                      Icon(Icons.logout, color: Colors.red),
-                      SizedBox(width: 8),
-                      Text('Выйти'),
-                    ],
-                  ),
-                ),
-              ];
-            },
+    return GestureDetector(
+      onTap: () {
+        // Закрываем все открытые свайпы при тапе на экран
+        if (_isSwiped.isNotEmpty) {
+          setState(() {
+            _isSwiped.clear();
+          });
+        }
+      },
+      child: Scaffold(
+        backgroundColor: const Color(0xFF1c1c1c),
+        appBar: AppBar(
+          backgroundColor: const Color(0xFF202020),
+          title: Text(
+            _nickname ?? 'Чаты',
+            style: const TextStyle(color: Colors.white),
           ),
-        ],
-      ),
-      body: _loading
-        ? const Center(child: CircularProgressIndicator())
-        : RefreshIndicator(
-            onRefresh: _loadChats,
-            backgroundColor: const Color(0xFF202020),
-            color: Colors.white,
-            child: _chats.isEmpty
-              ? const Center(
-                  child: Text(
-                    'Актуальных переписок нет',
-                    style: TextStyle(color: Colors.white),
+          actions: [
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.more_vert, color: Colors.white),
+              onSelected: (value) {
+                if (value == 'logout') {
+                  _logout();
+                }
+              },
+              itemBuilder: (BuildContext context) {
+                return [
+                  const PopupMenuItem<String>(
+                    value: 'logout',
+                    child: Row(
+                      children: [
+                        Icon(Icons.logout, color: Colors.red),
+                        SizedBox(width: 8),
+                        Text('Выйти'),
+                      ],
+                    ),
                   ),
-                )
-              : ListView.builder(
-                  itemCount: _chats.length,
-                  physics: const AlwaysScrollableScrollPhysics(),
-                  itemBuilder: (context, index) {
-                    final chat = _chats[index];
-                    final lastMessage = chat['last_message'] ?? 'Нет сообщений';
-                    final messagePrefix = _getMessagePrefix(chat);
-                    final displayMessage = '$messagePrefix$lastMessage';
-                    
-                    return GestureDetector(
-                      onHorizontalDragUpdate: (details) {
-                        if (details.delta.dx < 0 && !_isSwiped.containsKey(chat['id'])) {
-                          // Свайп влево - показываем кнопки
-                          setState(() {
-                            _isSwiped[chat['id']] = true;
-                          });
-                        } else if (details.delta.dx > 0 && _isSwiped.containsKey(chat['id'])) {
-                          // Свайп вправо - скрываем кнопки
-                          setState(() {
-                            _isSwiped.remove(chat['id']);
-                          });
-                        }
-                      },
-                      child: Stack(
-                        children: [
-                          // Фон с кнопками (показывается при свайпе)
-                          if (_isSwiped[chat['id']] == true)
-                            Positioned.fill(
-                              child: Container(
-                                color: Colors.transparent,
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.end,
-                                  children: [
-                                    Container(
-                                      margin: const EdgeInsets.symmetric(vertical: 8),
-                                      child: Row(
-                                        children: [
-                                          _buildActionButton(
-                                            icon: Icons.delete_sweep,
-                                            color: Colors.orange,
-                                            label: 'Очистить',
-                                            onTap: () => _clearChat(chat),
-                                          ),
-                                          const SizedBox(width: 8),
-                                          _buildActionButton(
-                                            icon: Icons.delete_forever,
-                                            color: Colors.red,
-                                            label: 'Удалить',
-                                            onTap: () => _deleteChat(chat),
-                                          ),
-                                          const SizedBox(width: 16),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          
-                          // Основной контент чата
-                          AnimatedContainer(
-                            duration: const Duration(milliseconds: 200),
-                            transform: Matrix4.translationValues(
-                              _isSwiped[chat['id']] == true ? -140 : 0,
-                              0,
-                              0,
-                            ),
-                            curve: Curves.easeInOut,
-                            child: Container(
-                              decoration: BoxDecoration(
-                                border: Border(
-                                  bottom: BorderSide(
-                                    color: Colors.grey[800]!,
-                                    width: 0.5,
-                                  ),
-                                ),
-                              ),
-                              child: ListTile(
-                                contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: 16,
-                                  vertical: 8,
-                                ),
-                                leading: CircleAvatar(
-                                  backgroundColor: const Color(0xFF7474d6),
-                                  child: Text(
-                                    (chat['partner_nickname'] ?? '?')[0].toUpperCase(),
-                                    style: const TextStyle(color: Colors.white),
-                                  ),
-                                ),
-                                title: Text(
-                                  chat['partner_nickname'] ?? 'Unknown',
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                subtitle: Text(
-                                  displayMessage,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    color: Colors.grey[300],
-                                    fontSize: 14,
-                                  ),
-                                ),
-                                trailing: Column(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  crossAxisAlignment: CrossAxisAlignment.end,
-                                  children: [
-                                    if (chat['last_message_time'] != null)
-                                      Text(
-                                        _formatTime(chat['last_message_time']),
-                                        style: const TextStyle(
-                                          fontSize: 12,
-                                          color: Colors.grey,
-                                        ),
-                                      ),
-                                    if (chat['unread_count'] != null && chat['unread_count'] > 0)
+                ];
+              },
+            ),
+          ],
+        ),
+        body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : RefreshIndicator(
+              onRefresh: _loadChats,
+              backgroundColor: const Color(0xFF202020),
+              color: Colors.white,
+              child: _chats.isEmpty
+                ? const Center(
+                    child: Text(
+                      'Актуальных переписок нет',
+                      style: TextStyle(color: Colors.white),
+                    ),
+                  )
+                : ListView.builder(
+                    itemCount: _chats.length,
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    itemBuilder: (context, index) {
+                      final chat = _chats[index];
+                      final lastMessage = chat['last_message'] ?? 'Нет сообщений';
+                      final messagePrefix = _getMessagePrefix(chat);
+                      final displayMessage = '$messagePrefix$lastMessage';
+                      final isSwipedOpen = _isSwiped[chat['id']] == true;
+                      
+                      return GestureDetector(
+                        onHorizontalDragUpdate: (details) {
+                          if (details.delta.dx < -5 && !isSwipedOpen) {
+                            // Свайп влево - показываем кнопки
+                            setState(() {
+                              // Закрываем все другие свайпы
+                              _isSwiped.clear();
+                              _isSwiped[chat['id']] = true;
+                            });
+                          } else if (details.delta.dx > 5 && isSwipedOpen) {
+                            // Свайп вправо - скрываем кнопки
+                            _closeSwipe(chat['id']);
+                          }
+                        },
+                        child: Stack(
+                          children: [
+                            // Фон с кнопками (показывается при свайпе)
+                            if (isSwipedOpen)
+                              Positioned.fill(
+                                child: Container(
+                                  color: Colors.transparent,
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.end,
+                                    children: [
                                       Container(
-                                        margin: const EdgeInsets.only(top: 4),
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 8,
-                                          vertical: 4,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: Colors.red,
-                                          borderRadius: BorderRadius.circular(12),
-                                        ),
-                                        constraints: const BoxConstraints(
-                                          minWidth: 24,
-                                          minHeight: 24,
-                                        ),
-                                        child: Text(
-                                          chat['unread_count'] > 99 ? '99+' : '${chat['unread_count']}',
-                                          style: const TextStyle(
-                                            fontSize: 12,
-                                            color: Colors.white,
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                          textAlign: TextAlign.center,
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                                onTap: () {
-                                  setState(() {
-                                    _isSwiped.remove(chat['id']);
-                                  });
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) => ChatScreen(
-                                        chatId: chat['id'],
-                                        partnerId: chat['partner_id'],
-                                        partnerNickname: chat['partner_nickname'],
-                                      ),
-                                    ),
-                                  ).then((_) => _loadChats());
-                                },
-                                onLongPress: () {
-                                  showModalBottomSheet(
-                                    context: context,
-                                    backgroundColor: const Color(0xFF2a2a2a),
-                                    builder: (context) {
-                                      return SafeArea(
-                                        child: Column(
-                                          mainAxisSize: MainAxisSize.min,
+                                        margin: const EdgeInsets.symmetric(vertical: 8),
+                                        child: Row(
                                           children: [
-                                            ListTile(
-                                              leading: const Icon(Icons.delete_sweep, color: Colors.orange),
-                                              title: const Text(
-                                                'Очистить чат',
-                                                style: TextStyle(color: Colors.white),
-                                              ),
-                                              subtitle: const Text(
-                                                'Удалить все сообщения у всех участников',
-                                                style: TextStyle(color: Colors.grey),
-                                              ),
-                                              onTap: () {
-                                                Navigator.pop(context);
-                                                _clearChat(chat);
-                                              },
+                                            _buildActionButton(
+                                              icon: Icons.delete_sweep,
+                                              color: Colors.orange,
+                                              label: 'Очистить',
+                                              onTap: () => _clearChat(chat),
                                             ),
-                                            ListTile(
-                                              leading: const Icon(Icons.delete_forever, color: Colors.red),
-                                              title: const Text(
-                                                'Удалить чат',
-                                                style: TextStyle(color: Colors.white),
-                                              ),
-                                              subtitle: const Text(
-                                                'Удалить чат полностью у всех участников',
-                                                style: TextStyle(color: Colors.grey),
-                                              ),
-                                              onTap: () {
-                                                Navigator.pop(context);
-                                                _deleteChat(chat);
-                                              },
+                                            const SizedBox(width: 8),
+                                            _buildActionButton(
+                                              icon: Icons.delete_forever,
+                                              color: Colors.red,
+                                              label: 'Удалить',
+                                              onTap: () => _deleteChat(chat),
                                             ),
-                                            ListTile(
-                                              leading: const Icon(Icons.cancel, color: Colors.grey),
-                                              title: const Text(
-                                                'Отмена',
-                                                style: TextStyle(color: Colors.white),
-                                              ),
-                                              onTap: () => Navigator.pop(context),
-                                            ),
+                                            const SizedBox(width: 16),
                                           ],
                                         ),
-                                      );
-                                    },
-                                  );
-                                },
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            
+                            // Основной контент чата
+                            AnimatedContainer(
+                              duration: const Duration(milliseconds: 200),
+                              transform: Matrix4.translationValues(
+                                isSwipedOpen ? -170 : 0,
+                                0,
+                                0,
+                              ),
+                              curve: Curves.easeInOut,
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF1c1c1c),
+                                  border: Border(
+                                    bottom: BorderSide(
+                                      color: Colors.grey[800]!,
+                                      width: 0.5,
+                                    ),
+                                  ),
+                                ),
+                                child: ListTile(
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 8,
+                                  ),
+                                  leading: CircleAvatar(
+                                    backgroundColor: const Color(0xFF7474d6),
+                                    child: Text(
+                                      (chat['partner_nickname'] ?? '?')[0].toUpperCase(),
+                                      style: const TextStyle(color: Colors.white),
+                                    ),
+                                  ),
+                                  title: Text(
+                                    chat['partner_nickname'] ?? 'Unknown',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  subtitle: Text(
+                                    displayMessage,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: Colors.grey[300],
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                  trailing: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    crossAxisAlignment: CrossAxisAlignment.end,
+                                    children: [
+                                      // Время показываем только когда свайп закрыт
+                                      if (!isSwipedOpen && chat['last_message_time'] != null)
+                                        Text(
+                                          _formatTime(chat['last_message_time']),
+                                          style: const TextStyle(
+                                            fontSize: 12,
+                                            color: Colors.grey,
+                                          ),
+                                        ),
+                                      // Счётчик непрочитанных показываем всегда
+                                      if (chat['unread_count'] != null && chat['unread_count'] > 0)
+                                        Container(
+                                          margin: const EdgeInsets.only(top: 4),
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                            vertical: 4,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: Colors.red,
+                                            borderRadius: BorderRadius.circular(12),
+                                          ),
+                                          constraints: const BoxConstraints(
+                                            minWidth: 24,
+                                            minHeight: 24,
+                                          ),
+                                          child: Text(
+                                            chat['unread_count'] > 99 ? '99+' : '${chat['unread_count']}',
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                            textAlign: TextAlign.center,
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                  onTap: () {
+                                    if (isSwipedOpen) {
+                                      // Если свайп открыт, закрываем его
+                                      _closeSwipe(chat['id']);
+                                    } else {
+                                      // Иначе открываем чат
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) => ChatScreen(
+                                            chatId: chat['id'],
+                                            partnerId: chat['partner_id'],
+                                            partnerNickname: chat['partner_nickname'],
+                                          ),
+                                        ),
+                                      ).then((_) => _loadChats());
+                                    }
+                                  },
+                                  onLongPress: () {
+                                    showModalBottomSheet(
+                                      context: context,
+                                      backgroundColor: const Color(0xFF2a2a2a),
+                                      builder: (context) {
+                                        return SafeArea(
+                                          child: Column(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              ListTile(
+                                                leading: const Icon(Icons.delete_sweep, color: Colors.orange),
+                                                title: const Text(
+                                                  'Очистить чат',
+                                                  style: TextStyle(color: Colors.white),
+                                                ),
+                                                subtitle: const Text(
+                                                  'Удалить все сообщения у всех участников',
+                                                  style: TextStyle(color: Colors.grey),
+                                                ),
+                                                onTap: () {
+                                                  Navigator.pop(context);
+                                                  _clearChat(chat);
+                                                },
+                                              ),
+                                              ListTile(
+                                                leading: const Icon(Icons.delete_forever, color: Colors.red),
+                                                title: const Text(
+                                                  'Удалить чат',
+                                                  style: TextStyle(color: Colors.white),
+                                                ),
+                                                subtitle: const Text(
+                                                  'Удалить чат полностью у всех участников',
+                                                  style: TextStyle(color: Colors.grey),
+                                                ),
+                                                onTap: () {
+                                                  Navigator.pop(context);
+                                                  _deleteChat(chat);
+                                                },
+                                              ),
+                                              ListTile(
+                                                leading: const Icon(Icons.cancel, color: Colors.grey),
+                                                title: const Text(
+                                                  'Отмена',
+                                                  style: TextStyle(color: Colors.white),
+                                                ),
+                                                onTap: () => Navigator.pop(context),
+                                              ),
+                                            ],
+                                          ),
+                                        );
+                                      },
+                                    );
+                                  },
+                                ),
                               ),
                             ),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-          ),
-      floatingActionButton: FloatingActionButton(
-        backgroundColor: const Color(0xFF7474d6),
-        child: const Icon(Icons.search, color: Colors.white),
-        onPressed: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const SearchScreen()),
-          ).then((_) => _loadChats());
-        },
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+            ),
+        floatingActionButton: FloatingActionButton(
+          backgroundColor: const Color(0xFF7474d6),
+          child: const Icon(Icons.search, color: Colors.white),
+          onPressed: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const SearchScreen()),
+            ).then((_) => _loadChats());
+          },
+        ),
       ),
     );
   }
