@@ -66,7 +66,6 @@ class _ChatScreenState extends State<ChatScreen> {
       });
 
       if (_messages.isNotEmpty) {
-        // Используем timestamp самого старого сообщения для автоудаления
         _firstMessageTime = DateTime.parse(_messages.last['timestamp']);
       }
 
@@ -95,9 +94,25 @@ class _ChatScreenState extends State<ChatScreen> {
         return;
       }
 
-      // Если это новое сообщение, добавляем его
+      if (data['type'] == 'cleared') {
+        setState(() {
+          _messages.clear();
+          _decryptedCache.clear();
+          _firstMessageTime = null;
+        });
+        return;
+      }
+
       if (data['id'] != null) {
-        // Проверяем, нет ли уже такого сообщения (чтобы избежать дубликатов)
+        // Удаляем локальное сообщение если оно есть
+        final localMessageIndex = _messages.indexWhere((m) => m['is_local'] == true);
+        if (localMessageIndex != -1) {
+          setState(() {
+            _messages.removeAt(localMessageIndex);
+          });
+        }
+
+        // Добавляем сообщение с сервера только если его еще нет
         if (!_messages.any((m) => m['id'] == data['id'])) {
           setState(() {
             _messages.add(data);
@@ -119,10 +134,8 @@ class _ChatScreenState extends State<ChatScreen> {
       final now = DateTime.now();
       final minutesSinceFirstMessage = now.difference(_firstMessageTime!).inMinutes;
       
-      // Если прошло 10 минут, удаляем ВСЕ сообщения в этом чате
       if (minutesSinceFirstMessage >= 10) {
         try {
-          // Удаляем все сообщения по одному с сервера
           for (final message in _messages) {
             if (message['id'] is int && message['id'] > 0) {
               try {
@@ -133,15 +146,11 @@ class _ChatScreenState extends State<ChatScreen> {
             }
           }
           
-          // Очищаем локальный список сообщений
           setState(() {
             _messages.clear();
             _decryptedCache.clear();
             _firstMessageTime = null;
           });
-          
-          // Уведомляем через сокет, что сообщения удалены
-          // (опционально, если сервер поддерживает)
         } catch (e) {
           print('Auto-delete error: $e');
         }
@@ -153,6 +162,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final text = _messageController.text.trim();
     if (text.isEmpty) return;
 
+    final messageText = text;
     _messageController.clear();
 
     try {
@@ -163,7 +173,7 @@ class _ChatScreenState extends State<ChatScreen> {
       final iv = List<int>.generate(16, (_) => Random.secure().nextInt(256));
 
       final encryptedMessage = _encryptWithAES(
-        text,
+        messageText,
         Uint8List.fromList(aesKey),
         Uint8List.fromList(iv),
       );
@@ -181,22 +191,31 @@ class _ChatScreenState extends State<ChatScreen> {
         'iv': base64Encode(iv),
       });
 
-      // ✅ OPTIMISTIC UI
-      final localMessageId = -DateTime.now().millisecondsSinceEpoch;
+      // Создаем уникальный локальный ID
+      final localMessageId = -(DateTime.now().millisecondsSinceEpoch + _messages.length);
+      
+      // Сохраняем оригинальный текст для быстрого отображения
+      final originalTextCache = messageText;
+      
+      final newMessage = {
+        'id': localMessageId,
+        'chat_id': widget.chatId,
+        'sender_id': _myUserId,
+        'content': content,
+        'encrypted_keys': encryptedKeys.map(
+          (k, v) => MapEntry(k.toString(), v),
+        ),
+        'is_local': true,
+        'original_text': originalTextCache,
+        'timestamp': DateTime.now().toIso8601String(),
+      };
+      
+      // Добавляем в кэш декриптированное сообщение сразу
+      _decryptedCache[localMessageId] = originalTextCache;
+      
       setState(() {
-        _messages.add({
-          'id': localMessageId,
-          'chat_id': widget.chatId,
-          'sender_id': _myUserId,
-          'content': content,
-          'encrypted_keys': encryptedKeys.map(
-            (k, v) => MapEntry(k.toString(), v),
-          ),
-          'is_local': true,
-          'timestamp': DateTime.now().toIso8601String(),
-        });
+        _messages.add(newMessage);
         
-        // Обновляем время первого сообщения при отправке первого сообщения
         if (_firstMessageTime == null) {
           _firstMessageTime = DateTime.now();
         }
@@ -214,15 +233,29 @@ class _ChatScreenState extends State<ChatScreen> {
         Map<int, String>.from(encryptedKeys),
       );
 
-      // После отправки обновляем список сообщений
-      await Future.delayed(const Duration(milliseconds: 500));
-      await _loadMessages();
+      // Периодически проверяем, не пришло ли сообщение с сервера
+      Future.delayed(const Duration(seconds: 3)).then((_) {
+        if (mounted) {
+          // Удаляем локальное сообщение если его нет в основном списке с сервера
+          _removeLocalMessageIfDuplicate(localMessageId);
+        }
+      });
       
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Send error: $e')),
+        SnackBar(content: Text('Ошибка отправки: $e')),
       );
+    }
+  }
+
+  void _removeLocalMessageIfDuplicate(int localMessageId) {
+    final localMessageIndex = _messages.indexWhere((m) => m['id'] == localMessageId);
+    if (localMessageIndex != -1) {
+      setState(() {
+        _messages.removeAt(localMessageIndex);
+        _decryptedCache.remove(localMessageId);
+      });
     }
   }
 
@@ -243,6 +276,12 @@ class _ChatScreenState extends State<ChatScreen> {
   String _decryptMessage(dynamic message) {
     final id = message['id'];
 
+    // Проверяем, есть ли оригинальный текст (для локальных сообщений)
+    if (message['original_text'] != null) {
+      return message['original_text'];
+    }
+
+    // Проверяем кэш
     if (_decryptedCache.containsKey(id)) {
       return _decryptedCache[id]!;
     }
@@ -253,7 +292,7 @@ class _ChatScreenState extends State<ChatScreen> {
       final myKey = keys[_myUserId.toString()];
       
       if (myKey == null) {
-        return '[Encrypted for other user]';
+        return '[Зашифровано для другого пользователя]';
       }
       
       final aesKey = CryptoService().decryptAESKey(myKey);
@@ -268,7 +307,7 @@ class _ChatScreenState extends State<ChatScreen> {
       return decrypted;
     } catch (e) {
       print('Decryption error: $e');
-      return '[Decryption failed]';
+      return '[Ошибка дешифровки]';
     }
   }
 
@@ -280,9 +319,114 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _scrollToBottom() {
     if (_scrollController.hasClients) {
-      _scrollController.jumpTo(
+      _scrollController.animateTo(
         _scrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
       );
+    }
+  }
+
+  Future<void> _clearChatNow() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF2a2a2a),
+        title: const Text(
+          'Очистить чат сейчас?',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: Text(
+          'Все сообщения в чате с ${widget.partnerNickname} будут удалены немедленно у всех участников.\nЭто действие нельзя отменить.',
+          style: const TextStyle(color: Colors.grey),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Отмена', style: TextStyle(color: Colors.white70)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Очистить', style: TextStyle(color: Colors.orange)),
+          ),
+        ],
+      ),
+    );
+    
+    if (confirmed == true) {
+      try {
+        await ApiService().clearChatMessages(widget.chatId);
+        
+        setState(() {
+          _messages.clear();
+          _decryptedCache.clear();
+          _firstMessageTime = null;
+        });
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Чат очищен'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      } catch (e) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Ошибка очистки: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _deleteChatNow() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF2a2a2a),
+        title: const Text(
+          'Удалить чат полностью?',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: Text(
+          'Чат с ${widget.partnerNickname} и все сообщения будут удалены у всех участников.\nЭто действие нельзя отменить.',
+          style: const TextStyle(color: Colors.grey),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Отмена', style: TextStyle(color: Colors.white70)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Удалить', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    
+    if (confirmed == true) {
+      try {
+        await ApiService().deleteChat(widget.chatId);
+        
+        if (mounted) {
+          Navigator.pop(context);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Чат удален'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } catch (e) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Ошибка удаления: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -313,6 +457,42 @@ class _ChatScreenState extends State<ChatScreen> {
           ],
         ),
         iconTheme: const IconThemeData(color: Colors.white),
+        actions: [
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert, color: Colors.white),
+            onSelected: (value) async {
+              if (value == 'clear_chat') {
+                await _clearChatNow();
+              } else if (value == 'delete_chat') {
+                await _deleteChatNow();
+              }
+            },
+            itemBuilder: (BuildContext context) {
+              return [
+                const PopupMenuItem<String>(
+                  value: 'clear_chat',
+                  child: Row(
+                    children: [
+                      Icon(Icons.delete_sweep, color: Colors.orange),
+                      SizedBox(width: 8),
+                      Text('Очистить чат сейчас'),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem<String>(
+                  value: 'delete_chat',
+                  child: Row(
+                    children: [
+                      Icon(Icons.delete_forever, color: Colors.red),
+                      SizedBox(width: 8),
+                      Text('Удалить чат полностью'),
+                    ],
+                  ),
+                ),
+              ];
+            },
+          ),
+        ],
       ),
       body: Column(
         children: [
@@ -320,7 +500,7 @@ class _ChatScreenState extends State<ChatScreen> {
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : _messages.isEmpty
-                    ? const Center(child: Text('No messages', style: TextStyle(color: Colors.white)))
+                    ? const Center(child: Text('Нет сообщений', style: TextStyle(color: Colors.white)))
                     : ListView.builder(
                         controller: _scrollController,
                         itemCount: _messages.length,
@@ -344,8 +524,8 @@ class _ChatScreenState extends State<ChatScreen> {
                               ),
                               decoration: BoxDecoration(
                                 color: isMine 
-                                    ? const Color(0xFF7474d6) // Ваше сообщение
-                                    : const Color(0xFF474747), // Сообщение партнера
+                                    ? const Color(0xFF7474d6)
+                                    : const Color(0xFF474747),
                                 borderRadius: BorderRadius.circular(12),
                               ),
                               child: Column(
@@ -418,9 +598,9 @@ class _ChatScreenState extends State<ChatScreen> {
     final now = DateTime.now();
     final diff = now.difference(dt);
     
-    if (diff.inMinutes < 1) return 'now';
-    if (diff.inHours < 1) return '${diff.inMinutes}m ago';
-    if (diff.inDays < 1) return '${diff.inHours}h ago';
-    return '${diff.inDays}d ago';
+    if (diff.inMinutes < 1) return 'сейчас';
+    if (diff.inHours < 1) return '${diff.inMinutes}м назад';
+    if (diff.inDays < 1) return '${diff.inHours}ч назад';
+    return '${diff.inDays}д назад';
   }
 }

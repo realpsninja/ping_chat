@@ -34,7 +34,11 @@ class SocketService {
       print('Received new_message: $data');
       final message = Map<String, dynamic>.from(data);
       _messageController.add(message);
-      _chatUpdateController.add({'type': 'new_message', 'data': message});
+      _chatUpdateController.add({
+        'type': 'new_message', 
+        'chatId': message['chat_id'] ?? message['chatId'],
+        'data': message
+      });
     });
 
     _socket!.on('message_deleted', (data) {
@@ -44,7 +48,11 @@ class SocketService {
         'messageId': data['messageId'],
         'chatId': data['chatId'],
       });
-      _chatUpdateController.add({'type': 'message_deleted', 'data': data});
+      _chatUpdateController.add({
+        'type': 'message_deleted', 
+        'chatId': data['chatId'],
+        'data': data
+      });
     });
 
     _socket!.on('user_status_changed', (data) {
@@ -52,12 +60,49 @@ class SocketService {
       _statusController.add(Map<String, dynamic>.from(data));
     });
 
-    // Добавляем обработку для очистки сообщений
     _socket!.on('messages_cleared', (data) {
       print('Received messages_cleared: $data');
       _messageController.add({
         'type': 'cleared',
         'chatId': data['chatId'],
+      });
+      _chatUpdateController.add({
+        'type': 'messages_cleared',
+        'chatId': data['chatId'],
+        'data': data
+      });
+    });
+
+    _socket!.on('chat_created', (data) {
+      print('Received chat_created: $data');
+      _chatUpdateController.add({
+        'type': 'chat_created',
+        'data': data
+      });
+    });
+
+    _socket!.on('chat_deleted', (data) {
+      print('Received chat_deleted: $data');
+      _chatUpdateController.add({
+        'type': 'chat_deleted',
+        'chatId': data['chatId'],
+        'data': data
+      });
+    });
+
+    _socket!.on('chat_update', (data) {
+      print('Received chat_update: $data');
+      _chatUpdateController.add({
+        'type': 'chat_update',
+        'data': data
+      });
+    });
+
+    _socket!.on('chats_updated', (data) {
+      print('Received chats_updated: ${data['chats']?.length} chats');
+      _chatUpdateController.add({
+        'type': 'chats_updated',
+        'data': data
       });
     });
   }
