@@ -496,6 +496,8 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
       body: Column(
         children: [
+          // Добавляем отступ сверху
+          const SizedBox(height: 12),
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
@@ -516,7 +518,7 @@ class _ChatScreenState extends State<ChatScreen> {
                             child: Container(
                               margin: const EdgeInsets.symmetric(
                                   horizontal: 8,
-                                  vertical: 10,
+                                  vertical: 3,
                               ),
                               padding: const EdgeInsets.all(12),
                               constraints: BoxConstraints(
@@ -528,21 +530,29 @@ class _ChatScreenState extends State<ChatScreen> {
                                     : const Color(0xFF474747),
                                 borderRadius: BorderRadius.circular(12),
                               ),
-                              child: Column(
-                                crossAxisAlignment: isMine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.end,
                                 children: [
-                                  Text(
-                                    decrypted,
-                                    style: const TextStyle(
-                                      color: Colors.white,
+                                  Flexible(
+                                    child: Text(
+                                      decrypted,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 15,
+                                      ),
                                     ),
                                   ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    _formatTime(msg['timestamp']),
-                                    style: const TextStyle(
-                                      fontSize: 10,
-                                      color: Colors.white70,
+                                  const SizedBox(width: 8),
+                                  Padding(
+                                    padding: const EdgeInsets.only(bottom: 0),
+                                    child: Text(
+                                      _formatTime(msg['timestamp']),
+                                      style: const TextStyle(
+                                        fontSize: 10,
+                                        color: Colors.white60,
+                                        height: 1.0,
+                                      ),
                                     ),
                                   ),
                                 ],
@@ -594,13 +604,13 @@ class _ChatScreenState extends State<ChatScreen> {
   
   String _formatTime(String? timestamp) {
     if (timestamp == null) return '';
-    final dt = DateTime.parse(timestamp);
-    final now = DateTime.now();
-    final diff = now.difference(dt);
-    
-    if (diff.inMinutes < 1) return 'сейчас';
-    if (diff.inHours < 1) return '${diff.inMinutes}м назад';
-    if (diff.inDays < 1) return '${diff.inHours}ч назад';
-    return '${diff.inDays}д назад';
+    try {
+      final dt = DateTime.parse(timestamp);
+      final hour = dt.hour.toString().padLeft(2, '0');
+      final minute = dt.minute.toString().padLeft(2, '0');
+      return '$hour:$minute';
+    } catch (e) {
+      return '';
+    }
   }
 }
