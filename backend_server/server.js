@@ -9,14 +9,12 @@ const cors = require('cors');
 const app = express();
 const server = http.createServer(app);
 
-// После создания io
 const io = socketIo(server, {
   cors: {
-    origin: "https://your_domain.com", 
+    origin: "https://plugins.timeto.watch",
     methods: ["GET", "POST"],
     credentials: true
   },
-  // Важно для работы за прокси
   transports: ['websocket', 'polling'],
   path: '/socket.io'
 });
@@ -26,19 +24,17 @@ app.use(express.json());
 app.use(express.static('public'));
 app.set('trust proxy', 1);
 
-// PostgreSQL connection
 const pool = new Pool({
-  user: 'your_database_username',
+  user: 'dtabase_use',
   host: 'localhost',
-  database: 'your_database_name',
-  password: 'your_strong_password',
+  database: 'database_namr',
+  password: 'database_password',
   port: 5432,
 });
 
 const JWT_SECRET = 'your-super-secret-jwt-key-change-this-in-production';
 const SALT_ROUNDS = 10;
 
-// Массив готовых никнеймов
 const NICKNAMES = [
   'wolf', 'fox', 'bear', 'void', 'raven', 'flame', 'storm', 'ice', 'rex', 'vox',
   'tiger', 'siz', 'lion', 'hawk', 'eagle', 'owl', 'falcon', 'snake',
@@ -121,38 +117,31 @@ const NICKNAMES = [
   'fire', 'earth', 'water', 'air', 'void', 'chaos', 'order', 'light', 'dark', 'mind'
 ];
 
-// Генерация случайного никнейма из массива
 function generateNickname() {
   return NICKNAMES[Math.floor(Math.random() * NICKNAMES.length)];
 }
 
-// Получить уникальный никнейм
 async function getUniqueNickname(maxAttempts = 20) {
   for (let attempts = 0; attempts < maxAttempts; attempts++) {
     const nickname = generateNickname();
     
     try {
-      // Проверяем, занят ли никнейм в базе данных
       const existing = await pool.query(
         'SELECT id FROM users WHERE nickname = $1', 
         [nickname]
       );
       
-      // Если никнейм свободен - возвращаем его
       if (existing.rows.length === 0) {
         return nickname;
       }
     } catch (error) {
       console.error('Error checking nickname availability:', error);
-      // В случае ошибки продолжаем попытки
     }
   }
   
-  // Если не нашли свободный никнейм за все попытки
   throw new Error('Could not generate unique nickname');
 }
 
-// Middleware to verify JWT token
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
@@ -170,9 +159,6 @@ function authenticateToken(req, res, next) {
   });
 }
 
-// REST API Endpoints
-
-// Register: Generate nickname and set PIN
 app.post('/api/register', async (req, res) => {
   const { pin } = req.body;
 
@@ -181,21 +167,15 @@ app.post('/api/register', async (req, res) => {
   }
 
   try {
-    // Генерируем уникальный никнейм
     const nickname = await getUniqueNickname();
-
-    // Hash PIN
     const pinHash = await bcrypt.hash(pin, SALT_ROUNDS);
 
-    // Insert user
     const result = await pool.query(
       'INSERT INTO users (nickname, pin_hash, created_at, last_seen) VALUES ($1, $2, NOW(), NOW()) RETURNING id, nickname, created_at',
       [nickname, pinHash]
     );
 
     const user = result.rows[0];
-
-    // Generate JWT token
     const token = jwt.sign({ userId: user.id, nickname: user.nickname }, JWT_SECRET, { expiresIn: '30d' });
 
     res.status(201).json({
@@ -211,7 +191,6 @@ app.post('/api/register', async (req, res) => {
   } catch (error) {
     console.error('Registration error:', error);
     
-    // Обрабатываем ошибку генерации ника
     if (error.message === 'Could not generate unique nickname') {
       return res.status(500).json({ error: 'Could not generate unique nickname. Please try again.' });
     }
@@ -263,7 +242,6 @@ app.get('/api/users/:userId/public-key', authenticateToken, async (req, res) => 
   }
 });
 
-// Login with nickname and PIN
 app.post('/api/login', async (req, res) => {
   const { nickname, pin } = req.body;
 
@@ -285,7 +263,6 @@ app.post('/api/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid nickname or PIN' });
     }
 
-    // Update last seen
     await pool.query('UPDATE users SET last_seen = NOW() WHERE id = $1', [user.id]);
 
     const token = jwt.sign({ userId: user.id, nickname: user.nickname }, JWT_SECRET, { expiresIn: '30d' });
@@ -306,7 +283,6 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// Search users by nickname
 app.get('/api/users/search', authenticateToken, async (req, res) => {
   const { q } = req.query;
 
@@ -331,7 +307,6 @@ app.get('/api/users/search', authenticateToken, async (req, res) => {
   }
 });
 
-// Get or create chat with specific user
 app.post('/api/chats/start', authenticateToken, async (req, res) => {
   const { targetUserId } = req.body;
 
@@ -344,13 +319,11 @@ app.post('/api/chats/start', authenticateToken, async (req, res) => {
   }
 
   try {
-    // Check if target user exists
     const userCheck = await pool.query('SELECT id, nickname FROM users WHERE id = $1', [targetUserId]);
     if (userCheck.rows.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Check if chat already exists
     const existingChat = await pool.query(
       `SELECT c.*, 
         CASE 
@@ -375,7 +348,6 @@ app.post('/api/chats/start', authenticateToken, async (req, res) => {
       });
     }
 
-    // Create new chat
     const newChat = await pool.query(
       `INSERT INTO chats (user1_id, user2_id, created_at) 
        VALUES ($1, $2, NOW()) 
@@ -400,11 +372,15 @@ app.post('/api/chats/start', authenticateToken, async (req, res) => {
   }
 });
 
-// Get all user's chats
+// Упрощенная версия эндпоинта для получения чатов (работает без read_at)
 app.get('/api/chats', authenticateToken, async (req, res) => {
   try {
-    const result = await pool.query(
-      `SELECT c.*, 
+    console.log(`[DEBUG] Запрос чатов для пользователя ${req.user.userId} (${req.user.nickname})`);
+    
+    // 1. Получаем базовую информацию о чатах
+    const chatsResult = await pool.query(
+      `SELECT 
+        c.*,
         CASE 
           WHEN c.user1_id = $1 THEN u2.nickname 
           ELSE u1.nickname 
@@ -416,36 +392,99 @@ app.get('/api/chats', authenticateToken, async (req, res) => {
         CASE 
           WHEN c.user1_id = $1 THEN u2.last_seen 
           ELSE u1.last_seen 
-        END as partner_last_seen,
-        m.content as last_message,
-        m.timestamp as last_message_time
+        END as partner_last_seen
        FROM chats c
        JOIN users u1 ON c.user1_id = u1.id
        JOIN users u2 ON c.user2_id = u2.id
-       LEFT JOIN LATERAL (
-         SELECT content, timestamp 
-         FROM messages 
-         WHERE chat_id = c.id AND is_deleted = false 
-         ORDER BY timestamp DESC 
-         LIMIT 1
-       ) m ON true
-       WHERE c.user1_id = $1 OR c.user2_id = $1
-       ORDER BY COALESCE(m.timestamp, c.created_at) DESC`,
+       WHERE c.user1_id = $1 OR c.user2_id = $1`,
       [req.user.userId]
     );
-
+    
+    console.log(`[DEBUG] Найдено ${chatsResult.rows.length} базовых чатов`);
+    
+    if (chatsResult.rows.length === 0) {
+      console.log(`[DEBUG] У пользователя ${req.user.userId} нет чатов`);
+      return res.json({
+        success: true,
+        chats: []
+      });
+    }
+    
+    // 2. Для каждого чата получаем детали
+    const chatsWithDetails = [];
+    
+    for (const chat of chatsResult.rows) {
+      try {
+        // Последнее сообщение
+        const lastMessageResult = await pool.query(
+          `SELECT content, timestamp, sender_id 
+           FROM messages 
+           WHERE chat_id = $1 AND is_deleted = false 
+           ORDER BY timestamp DESC 
+           LIMIT 1`,
+          [chat.id]
+        );
+        
+        // Считаем ВСЕ сообщения от собеседника как "непрочитанные" 
+        // (так как колонки read_at может не быть)
+        const messagesFromPartner = await pool.query(
+          `SELECT COUNT(*) as count 
+           FROM messages 
+           WHERE chat_id = $1 
+             AND is_deleted = false 
+             AND sender_id != $2`,
+          [chat.id, req.user.userId]
+        );
+        
+        const chatWithDetails = {
+          ...chat,
+          last_message: lastMessageResult.rows[0]?.content || null,
+          last_message_time: lastMessageResult.rows[0]?.timestamp || null,
+          last_message_sender_id: lastMessageResult.rows[0]?.sender_id || null,
+          unread_count: parseInt(messagesFromPartner.rows[0]?.count || 0)
+        };
+        
+        chatsWithDetails.push(chatWithDetails);
+        
+        console.log(`[DEBUG] Чат ${chat.id}: партнер=${chat.partner_nickname}, сообщений=${messagesFromPartner.rows[0]?.count || 0}`);
+        
+      } catch (error) {
+        console.error(`[ERROR] Ошибка при обработке чата ${chat.id}:`, error);
+        // Добавляем чат без деталей
+        chatsWithDetails.push({
+          ...chat,
+          last_message: null,
+          last_message_time: null,
+          last_message_sender_id: null,
+          unread_count: 0
+        });
+      }
+    }
+    
+    // Сортируем по времени последнего сообщения
+    chatsWithDetails.sort((a, b) => {
+      const timeA = a.last_message_time ? new Date(a.last_message_time) : new Date(0);
+      const timeB = b.last_message_time ? new Date(b.last_message_time) : new Date(0);
+      return timeB - timeA;
+    });
+    
+    console.log(`[DEBUG] Возвращаем ${chatsWithDetails.length} чатов`);
+    
     res.json({
       success: true,
-      chats: result.rows
+      chats: chatsWithDetails
     });
-
+    
   } catch (error) {
-    console.error('Get chats error:', error);
-    res.status(500).json({ error: 'Failed to get chats' });
+    console.error('[ERROR] Get chats error:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to get chats',
+      details: error.message 
+    });
   }
 });
 
-// Get messages for a chat
 app.get('/api/chats/:chatId/messages', authenticateToken, async (req, res) => {
   const { chatId } = req.params;
   const { limit = 50, before } = req.query;
@@ -489,7 +528,6 @@ app.get('/api/chats/:chatId/messages', authenticateToken, async (req, res) => {
   }
 });
 
-// Delete a message
 app.delete('/api/messages/:messageId', authenticateToken, async (req, res) => {
   const { messageId } = req.params;
 
@@ -503,7 +541,6 @@ app.delete('/api/messages/:messageId', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Message not found or access denied' });
     }
 
-    // Emit socket event to notify deletion
     const message = result.rows[0];
     io.to(`chat_${message.chat_id}`).emit('message_deleted', {
       messageId: message.id,
@@ -521,12 +558,10 @@ app.delete('/api/messages/:messageId', authenticateToken, async (req, res) => {
   }
 });
 
-// Delete entire chat
 app.delete('/api/chats/:chatId', authenticateToken, async (req, res) => {
   const { chatId } = req.params;
 
   try {
-    // Verify user is part of this chat
     const chatCheck = await pool.query(
       'SELECT * FROM chats WHERE id = $1 AND (user1_id = $2 OR user2_id = $2)',
       [chatId, req.user.userId]
@@ -536,14 +571,39 @@ app.delete('/api/chats/:chatId', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Access denied to this chat' });
     }
 
-    // Delete all messages first
-    await pool.query('DELETE FROM messages WHERE chat_id = $1', [chatId]);
+    const chatInfo = await pool.query(
+      `SELECT user1_id, user2_id FROM chats WHERE id = $1`,
+      [chatId]
+    );
 
-    // Delete chat
+    await pool.query('DELETE FROM messages WHERE chat_id = $1', [chatId]);
     await pool.query('DELETE FROM chats WHERE id = $1', [chatId]);
 
-    // Notify other user
-    io.to(`chat_${chatId}`).emit('chat_deleted', { chatId });
+    const chat = chatInfo.rows[0];
+    io.to(`chat_${chatId}`).emit('chat_deleted', { 
+      chatId,
+      deletedBy: req.user.userId 
+    });
+
+    if (chat.user1_id) {
+      const socketId1 = onlineUsers.get(chat.user1_id);
+      if (socketId1) {
+        io.to(socketId1).emit('chat_update', { 
+          type: 'deleted',
+          chatId 
+        });
+      }
+    }
+    
+    if (chat.user2_id) {
+      const socketId2 = onlineUsers.get(chat.user2_id);
+      if (socketId2) {
+        io.to(socketId2).emit('chat_update', { 
+          type: 'deleted',
+          chatId 
+        });
+      }
+    }
 
     res.json({
       success: true,
@@ -556,8 +616,64 @@ app.delete('/api/chats/:chatId', authenticateToken, async (req, res) => {
   }
 });
 
-// WebSocket connection handling
-const onlineUsers = new Map(); // userId -> socketId
+app.post('/api/chats/:chatId/clear', authenticateToken, async (req, res) => {
+  const { chatId } = req.params;
+
+  try {
+    const chatCheck = await pool.query(
+      'SELECT * FROM chats WHERE id = $1 AND (user1_id = $2 OR user2_id = $2)',
+      [chatId, req.user.userId]
+    );
+
+    if (chatCheck.rows.length === 0) {
+      return res.status(403).json({ error: 'Access denied to this chat' });
+    }
+
+    const chatInfo = await pool.query(
+      `SELECT user1_id, user2_id FROM chats WHERE id = $1`,
+      [chatId]
+    );
+
+    await pool.query('DELETE FROM messages WHERE chat_id = $1', [chatId]);
+
+    const chat = chatInfo.rows[0];
+    io.to(`chat_${chatId}`).emit('messages_cleared', { 
+      chatId,
+      clearedBy: req.user.userId 
+    });
+
+    if (chat.user1_id) {
+      const socketId1 = onlineUsers.get(chat.user1_id);
+      if (socketId1) {
+        io.to(socketId1).emit('chat_update', { 
+          type: 'cleared',
+          chatId 
+        });
+      }
+    }
+    
+    if (chat.user2_id) {
+      const socketId2 = onlineUsers.get(chat.user2_id);
+      if (socketId2) {
+        io.to(socketId2).emit('chat_update', { 
+          type: 'cleared',
+          chatId 
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'Messages cleared'
+    });
+
+  } catch (error) {
+    console.error('Clear messages error:', error);
+    res.status(500).json({ error: 'Failed to clear messages' });
+  }
+});
+
+const onlineUsers = new Map();
 
 io.use((socket, next) => {
   const token = socket.handshake.auth.token;
@@ -579,13 +695,10 @@ io.use((socket, next) => {
 io.on('connection', async (socket) => {
   console.log(`User connected: ${socket.nickname} (${socket.userId})`);
 
-  // Mark user as online
   onlineUsers.set(socket.userId, socket.id);
   
-  // Update last_seen in database
   await pool.query('UPDATE users SET last_seen = NOW() WHERE id = $1', [socket.userId]);
 
-  // Join user's chat rooms
   try {
     const chats = await pool.query(
       'SELECT id FROM chats WHERE user1_id = $1 OR user2_id = $1',
@@ -599,10 +712,8 @@ io.on('connection', async (socket) => {
     console.error('Error joining chat rooms:', error);
   }
 
-  // Broadcast online status to all user's contacts
   broadcastUserStatus(socket.userId, true);
 
-  // Send message
   socket.on('send_message', async (data) => {
     const { chatId, content, encryptedKeys } = data;
   
@@ -616,7 +727,6 @@ io.on('connection', async (socket) => {
         return socket.emit('error', { message: 'Access denied to this chat' });
       }
   
-      // Insert message with encrypted_keys
       const result = await pool.query(
         'INSERT INTO messages (chat_id, sender_id, content, encrypted_keys, timestamp, is_deleted) VALUES ($1, $2, $3, $4, NOW(), false) RETURNING *',
         [chatId, socket.userId, content, JSON.stringify(encryptedKeys || {})]
@@ -627,16 +737,14 @@ io.on('connection', async (socket) => {
         sender_nickname: socket.nickname
       };
   
-      // Emit to chat room
       io.to(`chat_${chatId}`).emit('new_message', message);
-  
+
     } catch (error) {
       console.error('Send message error:', error);
       socket.emit('error', { message: 'Failed to send message' });
     }
   });
 
-  // WebRTC signaling for audio calls
   socket.on('call_user', async (data) => {
     const { targetUserId, offer } = data;
 
@@ -688,24 +796,54 @@ io.on('connection', async (socket) => {
     }
   });
 
-  // Disconnect
+  socket.on('get_chats', async () => {
+    try {
+      const chats = await pool.query(
+        `SELECT c.*, 
+          CASE 
+            WHEN c.user1_id = $1 THEN u2.nickname 
+            ELSE u1.nickname 
+          END as partner_nickname,
+          CASE 
+            WHEN c.user1_id = $1 THEN c.user2_id 
+            ELSE c.user1_id 
+          END as partner_id,
+          m.content as last_message,
+          m.timestamp as last_message_time
+         FROM chats c
+         JOIN users u1 ON c.user1_id = u1.id
+         JOIN users u2 ON c.user2_id = u2.id
+         LEFT JOIN LATERAL (
+           SELECT content, timestamp 
+           FROM messages 
+           WHERE chat_id = c.id AND is_deleted = false 
+           ORDER BY timestamp DESC 
+           LIMIT 1
+         ) m ON true
+         WHERE c.user1_id = $1 OR c.user2_id = $1
+         ORDER BY COALESCE(m.timestamp, c.created_at) DESC`,
+        [socket.userId]
+      );
+
+      socket.emit('chats_updated', { chats: chats.rows });
+    } catch (error) {
+      console.error('Error getting chats:', error);
+    }
+  });
+
   socket.on('disconnect', async () => {
     console.log(`User disconnected: ${socket.nickname} (${socket.userId})`);
     
     onlineUsers.delete(socket.userId);
     
-    // Update last_seen
     await pool.query('UPDATE users SET last_seen = NOW() WHERE id = $1', [socket.userId]);
     
-    // Broadcast offline status
     broadcastUserStatus(socket.userId, false);
   });
 });
 
-// Helper function to broadcast user online/offline status
 async function broadcastUserStatus(userId, isOnline) {
   try {
-    // Get all chats this user is part of
     const chats = await pool.query(
       `SELECT id, 
         CASE WHEN user1_id = $1 THEN user2_id ELSE user1_id END as other_user_id
@@ -714,7 +852,6 @@ async function broadcastUserStatus(userId, isOnline) {
       [userId]
     );
 
-    // Notify each contact
     chats.rows.forEach(chat => {
       const contactSocketId = onlineUsers.get(chat.other_user_id);
       if (contactSocketId) {
@@ -730,7 +867,48 @@ async function broadcastUserStatus(userId, isOnline) {
   }
 }
 
-// Start server
+// Добавляем отладочный эндпоинт для проверки данных
+app.get('/api/debug/test', authenticateToken, async (req, res) => {
+  try {
+    console.log(`=== DEBUG TEST для пользователя ${req.user.userId} ===`);
+    
+    // Проверяем таблицы
+    const tables = await pool.query(
+      "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
+    );
+    
+    console.log('Таблицы в БД:', tables.rows.map(r => r.table_name));
+    
+    // Проверяем наличие чатов
+    const chats = await pool.query(
+      'SELECT * FROM chats WHERE user1_id = $1 OR user2_id = $1',
+      [req.user.userId]
+    );
+    
+    console.log(`Чаты пользователя: ${chats.rows.length}`);
+    
+    // Для каждого чата проверяем сообщения
+    for (const chat of chats.rows) {
+      const messages = await pool.query(
+        'SELECT COUNT(*) as count FROM messages WHERE chat_id = $1',
+        [chat.id]
+      );
+      console.log(`Чат ${chat.id}: ${messages.rows[0].count} сообщений`);
+    }
+    
+    res.json({
+      success: true,
+      tables: tables.rows.map(r => r.table_name),
+      user_chats: chats.rows.length,
+      user_id: req.user.userId
+    });
+    
+  } catch (error) {
+    console.error('Debug test error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 
 server.listen(PORT, () => {
