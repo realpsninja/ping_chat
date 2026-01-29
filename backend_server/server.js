@@ -25,14 +25,14 @@ app.use(express.static('public'));
 app.set('trust proxy', 1);
 
 const pool = new Pool({
-  user: 'dtabase_use',
+  user: 'messenger_user',
   host: 'localhost',
-  database: 'database_namr',
-  password: 'database_password',
+  database: 'messenger_db',
+  password: 'strong_pasc9t9f55g0g6g05g50@c84dc95#h0g60cr9#42=gt0g5f9f5960fd4#g0c959c4c4sword_here',
   port: 5432,
 });
 
-const JWT_SECRET = 'your-super-secret-jwt-key-change-this-in-production';
+const JWT_SECRET = 'your-super-secret-jwt9876-key-change-this-in-production';
 const SALT_ROUNDS = 10;
 
 const NICKNAMES = [
@@ -304,6 +304,44 @@ app.get('/api/users/search', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Search error:', error);
     res.status(500).json({ error: 'Search failed' });
+  }
+});
+
+app.get('/api/users/:userId/presence', authenticateToken, async (req, res) => {
+  const { userId } = req.params;
+
+  try {
+    // Проверяем, существует ли пользователь
+    const userResult = await pool.query(
+      'SELECT id, nickname, last_seen FROM users WHERE id = $1',
+      [userId]
+    );
+
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        error: 'User not found' 
+      });
+    }
+
+    const user = userResult.rows[0];
+    const isOnline = onlineUsers.has(parseInt(userId));
+    const lastSeen = user.last_seen;
+
+    res.json({
+      success: true,
+      user_id: parseInt(userId),
+      is_online: isOnline,
+      last_seen: lastSeen ? lastSeen.toISOString() : null,
+      nickname: user.nickname
+    });
+
+  } catch (error) {
+    console.error('Get user presence error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to get user presence' 
+    });
   }
 });
 
@@ -697,9 +735,11 @@ io.on('connection', async (socket) => {
 
   onlineUsers.set(socket.userId, socket.id);
   
+  // Обновляем время последнего посещения
   await pool.query('UPDATE users SET last_seen = NOW() WHERE id = $1', [socket.userId]);
 
   try {
+    // Присоединяемся к комнатам чатов
     const chats = await pool.query(
       'SELECT id FROM chats WHERE user1_id = $1 OR user2_id = $1',
       [socket.userId]
@@ -708,11 +748,21 @@ io.on('connection', async (socket) => {
     chats.rows.forEach(chat => {
       socket.join(`chat_${chat.id}`);
     });
+
+    // Отправляем информацию о текущем онлайн статусе самому пользователю
+    socket.emit('presence_update', {
+      user_id: socket.userId,
+      is_online: true,
+      last_seen: null,
+      timestamp: new Date().toISOString()
+    });
+
   } catch (error) {
-    console.error('Error joining chat rooms:', error);
+    console.error('Error during connection setup:', error);
   }
 
-  broadcastUserStatus(socket.userId, true);
+  // Рассылаем информацию о новом онлайн статусе всем контактам
+  broadcastUserPresence(socket.userId, true, null);
 
   socket.on('send_message', async (data) => {
     const { chatId, content, encryptedKeys } = data;
@@ -831,83 +881,102 @@ io.on('connection', async (socket) => {
     }
   });
 
+  // Обработчик для запроса статуса пользователя через сокет
+  socket.on('get_user_presence', async (data) => {
+    const { userId } = data;
+    
+    if (!userId) {
+      return socket.emit('presence_error', { message: 'User ID required' });
+    }
+
+    try {
+      const userResult = await pool.query(
+        'SELECT id, nickname, last_seen FROM users WHERE id = $1',
+        [userId]
+      );
+
+      if (userResult.rows.length === 0) {
+        return socket.emit('presence_result', {
+          user_id: userId,
+          error: 'User not found'
+        });
+      }
+
+      const user = userResult.rows[0];
+      const isOnline = onlineUsers.has(parseInt(userId));
+
+      socket.emit('presence_result', {
+        user_id: userId,
+        nickname: user.nickname,
+        is_online: isOnline,
+        last_seen: user.last_seen ? user.last_seen.toISOString() : null,
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (error) {
+      console.error('Get user presence socket error:', error);
+      socket.emit('presence_error', { 
+        message: 'Failed to get user presence' 
+      });
+    }
+  });
+
   socket.on('disconnect', async () => {
     console.log(`User disconnected: ${socket.nickname} (${socket.userId})`);
     
     onlineUsers.delete(socket.userId);
     
+    const now = new Date();
+    
+    // Обновляем время последнего посещения
     await pool.query('UPDATE users SET last_seen = NOW() WHERE id = $1', [socket.userId]);
     
-    broadcastUserStatus(socket.userId, false);
+    // Рассылаем информацию об оффлайн статусе всем контактам
+    broadcastUserPresence(socket.userId, false, now.toISOString());
   });
 });
 
-async function broadcastUserStatus(userId, isOnline) {
+// Функция для трансляции статуса присутствия
+async function broadcastUserPresence(userId, isOnline, lastSeen = null) {
   try {
+    const userResult = await pool.query(
+      'SELECT nickname FROM users WHERE id = $1',
+      [userId]
+    );
+
+    if (userResult.rows.length === 0) return;
+
+    const nickname = userResult.rows[0].nickname;
+    
+    // Находим всех пользователей, у которых есть чаты с этим пользователем
     const chats = await pool.query(
-      `SELECT id, 
+      `SELECT 
         CASE WHEN user1_id = $1 THEN user2_id ELSE user1_id END as other_user_id
        FROM chats 
        WHERE user1_id = $1 OR user2_id = $1`,
       [userId]
     );
 
-    chats.rows.forEach(chat => {
+    const presenceData = {
+      user_id: parseInt(userId),
+      nickname: nickname,
+      is_online: isOnline,
+      last_seen: lastSeen,
+      timestamp: new Date().toISOString()
+    };
+
+    // Отправляем каждому контакту индивидуально
+    for (const chat of chats.rows) {
       const contactSocketId = onlineUsers.get(chat.other_user_id);
       if (contactSocketId) {
-        io.to(contactSocketId).emit('user_status_changed', {
-          userId,
-          isOnline,
-          lastSeen: isOnline ? null : new Date()
-        });
+        io.to(contactSocketId).emit('presence_update', presenceData);
       }
-    });
+    }
+
   } catch (error) {
-    console.error('Error broadcasting user status:', error);
+    console.error('Broadcast user presence error:', error);
   }
 }
-
-// Добавляем отладочный эндпоинт для проверки данных
-app.get('/api/debug/test', authenticateToken, async (req, res) => {
-  try {
-    console.log(`=== DEBUG TEST для пользователя ${req.user.userId} ===`);
-    
-    // Проверяем таблицы
-    const tables = await pool.query(
-      "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
-    );
-    
-    console.log('Таблицы в БД:', tables.rows.map(r => r.table_name));
-    
-    // Проверяем наличие чатов
-    const chats = await pool.query(
-      'SELECT * FROM chats WHERE user1_id = $1 OR user2_id = $1',
-      [req.user.userId]
-    );
-    
-    console.log(`Чаты пользователя: ${chats.rows.length}`);
-    
-    // Для каждого чата проверяем сообщения
-    for (const chat of chats.rows) {
-      const messages = await pool.query(
-        'SELECT COUNT(*) as count FROM messages WHERE chat_id = $1',
-        [chat.id]
-      );
-      console.log(`Чат ${chat.id}: ${messages.rows[0].count} сообщений`);
-    }
-    
-    res.json({
-      success: true,
-      tables: tables.rows.map(r => r.table_name),
-      user_chats: chats.rows.length,
-      user_id: req.user.userId
-    });
-    
-  } catch (error) {
-    console.error('Debug test error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
 
 const PORT = process.env.PORT || 3000;
 
