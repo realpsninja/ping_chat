@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
 import '../services/crypto_service.dart';
 import '../services/socket_service.dart';
+import '../utils/status_utils.dart';
 
 class ChatScreen extends StatefulWidget {
   final int chatId;
@@ -43,7 +44,7 @@ class _ChatScreenState extends State<ChatScreen> {
   DateTime? _firstMessageTime;
   StreamSubscription? _messageSubscription;
   
-  // Добавляем новые поля для статуса онлайн
+  // Поля для статуса онлайн
   bool _isPartnerOnline = false;
   DateTime? _partnerLastSeen;
   StreamSubscription? _presenceSubscription;
@@ -61,15 +62,12 @@ class _ChatScreenState extends State<ChatScreen> {
     await _loadMessages();
     _listenToMessages();
     _startAutoDeleteTimer();
-    _initPresenceTracking(); // Добавляем инициализацию отслеживания присутствия
+    _initPresenceTracking();
   }
   
-  // Добавляем метод для инициализации отслеживания присутствия
   void _initPresenceTracking() {
-    // Получаем текущий статус партнера
     _updatePartnerPresence();
     
-    // Слушаем обновления статуса из сокета
     _presenceSubscription = SocketService().presenceStream.listen((data) {
       if (data['user_id'] == widget.partnerId) {
         setState(() {
@@ -81,22 +79,11 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     });
     
-    // Периодически обновляем статус (каждые 30 секунд)
     _presenceTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       _updatePartnerPresence();
     });
-    
-    // Также обновляем статус при возвращении на экран
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final routeObserver = ModalRoute.of(context);
-      routeObserver?.addScopedWillPopCallback(() async {
-        _updatePartnerPresence();
-        return true;
-      });
-    });
   }
   
-  // Метод для обновления статуса присутствия партнера
   Future<void> _updatePartnerPresence() async {
     try {
       final presenceData = await ApiService().getUserPresence(widget.partnerId);
@@ -111,64 +98,6 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (e) {
       print('Failed to update presence: $e');
     }
-  }
-  
-  // Метод для форматирования времени последнего посещения
-  String _formatLastSeen() {
-    if (_isPartnerOnline) {
-      return 'Онлайн';
-    }
-    
-    if (_partnerLastSeen == null) {
-      return 'Был недавно';
-    }
-    
-    final now = DateTime.now();
-    final difference = now.difference(_partnerLastSeen!);
-    
-    if (difference.inSeconds < 60) {
-      return 'Был только что';
-    } else if (difference.inMinutes < 60) {
-      final minutes = difference.inMinutes;
-      return 'Был $minutes ${_getMinutesText(minutes)} назад';
-    } else if (difference.inHours < 24) {
-      final hours = difference.inHours;
-      return 'Был $hours ${_getHoursText(hours)} назад';
-    } else {
-      final days = difference.inDays;
-      if (days == 1) {
-        return 'Был вчера';
-      } else if (days < 7) {
-        return 'Был $days ${_getDaysText(days)} назад';
-      } else {
-        final formattedDate = '${_partnerLastSeen!.day.toString().padLeft(2, '0')}.'
-            '${_partnerLastSeen!.month.toString().padLeft(2, '0')}.'
-            '${_partnerLastSeen!.year}';
-        return 'Был $formattedDate';
-      }
-    }
-  }
-  
-  // Вспомогательные методы для правильного склонения
-  String _getMinutesText(int minutes) {
-    if (minutes % 10 == 1 && minutes % 100 != 11) return 'минуту';
-    if (minutes % 10 >= 2 && minutes % 10 <= 4 && 
-        (minutes % 100 < 10 || minutes % 100 >= 20)) return 'минуты';
-    return 'минут';
-  }
-  
-  String _getHoursText(int hours) {
-    if (hours % 10 == 1 && hours % 100 != 11) return 'час';
-    if (hours % 10 >= 2 && hours % 10 <= 4 && 
-        (hours % 100 < 10 || hours % 100 >= 20)) return 'часа';
-    return 'часов';
-  }
-  
-  String _getDaysText(int days) {
-    if (days % 10 == 1 && days % 100 != 11) return 'день';
-    if (days % 10 >= 2 && days % 10 <= 4 && 
-        (days % 100 < 10 || days % 100 >= 20)) return 'дня';
-    return 'дней';
   }
 
   Future<void> _loadMessages() async {
@@ -218,7 +147,6 @@ class _ChatScreenState extends State<ChatScreen> {
       }
 
       if (data['id'] != null) {
-        // Удаляем локальное сообщение если оно есть
         final localMessageIndex = _messages.indexWhere((m) => m['is_local'] == true);
         if (localMessageIndex != -1) {
           setState(() {
@@ -226,7 +154,6 @@ class _ChatScreenState extends State<ChatScreen> {
           });
         }
 
-        // Добавляем сообщение с сервера только если его еще нет
         if (!_messages.any((m) => m['id'] == data['id'])) {
           setState(() {
             _messages.add(data);
@@ -305,10 +232,8 @@ class _ChatScreenState extends State<ChatScreen> {
         'iv': base64Encode(iv),
       });
 
-      // Создаем уникальный локальный ID
       final localMessageId = -(DateTime.now().millisecondsSinceEpoch + _messages.length);
       
-      // Сохраняем оригинальный текст для быстрого отображения
       final originalTextCache = messageText;
       
       final newMessage = {
@@ -324,7 +249,6 @@ class _ChatScreenState extends State<ChatScreen> {
         'timestamp': DateTime.now().toIso8601String(),
       };
       
-      // Добавляем в кэш декриптированное сообщение сразу
       _decryptedCache[localMessageId] = originalTextCache;
       
       setState(() {
@@ -339,7 +263,6 @@ class _ChatScreenState extends State<ChatScreen> {
         _scrollToBottom();
       });
 
-      // Отправляем через сокет
       final keysAsString = encryptedKeys.map((k, v) => MapEntry(k.toString(), v));
       SocketService().sendMessage(
         widget.chatId,
@@ -347,10 +270,8 @@ class _ChatScreenState extends State<ChatScreen> {
         Map<int, String>.from(encryptedKeys),
       );
 
-      // Периодически проверяем, не пришло ли сообщение с сервера
       Future.delayed(const Duration(seconds: 3)).then((_) {
         if (mounted) {
-          // Удаляем локальное сообщение если его нет в основном списке с сервера
           _removeLocalMessageIfDuplicate(localMessageId);
         }
       });
@@ -390,12 +311,10 @@ class _ChatScreenState extends State<ChatScreen> {
   String _decryptMessage(dynamic message) {
     final id = message['id'];
 
-    // Проверяем, есть ли оригинальный текст (для локальных сообщений)
     if (message['original_text'] != null) {
       return message['original_text'];
     }
 
-    // Проверяем кэш
     if (_decryptedCache.containsKey(id)) {
       return _decryptedCache[id]!;
     }
@@ -548,8 +467,8 @@ class _ChatScreenState extends State<ChatScreen> {
   void dispose() {
     _autoDeleteTimer?.cancel();
     _messageSubscription?.cancel();
-    _presenceSubscription?.cancel(); // Отписываемся от потока присутствия
-    _presenceTimer?.cancel(); // Отменяем таймер обновления статуса
+    _presenceSubscription?.cancel();
+    _presenceTimer?.cancel();
     _messageController.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -557,6 +476,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final statusText = StatusUtils.formatLastSeen(_partnerLastSeen, _isPartnerOnline);
+    
     return Scaffold(
       backgroundColor: const Color(0xFF1c1c1e),
       appBar: AppBar(
@@ -565,31 +486,30 @@ class _ChatScreenState extends State<ChatScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(widget.partnerNickname, style: const TextStyle(color: Colors.white)),
-            Text(
-              _formatLastSeen(), // Используем наш метод для отображения статуса
-              style: TextStyle(
-                fontSize: 12, 
-                color: _isPartnerOnline ? Colors.green : Colors.white70, // Зеленый если онлайн
-              ),
+            Row(
+              children: [
+                Container(
+                  width: 8,
+                  height: 8,
+                  margin: const EdgeInsets.only(right: 6),
+                  decoration: BoxDecoration(
+                    color: _isPartnerOnline ? Colors.green : Colors.grey,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                Text(
+                  statusText,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: _isPartnerOnline ? Colors.green : Colors.white70,
+                  ),
+                ),
+              ],
             ),
           ],
         ),
         iconTheme: const IconThemeData(color: Colors.white),
         actions: [
-          // Добавляем индикатор онлайн-статуса рядом с меню
-          Container(
-            margin: const EdgeInsets.only(right: 8),
-            child: _isPartnerOnline 
-                ? Container(
-                    width: 8,
-                    height: 8,
-                    decoration: const BoxDecoration(
-                      color: Colors.green,
-                      shape: BoxShape.circle,
-                    ),
-                  )
-                : null,
-          ),
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert, color: Colors.white),
             color: const Color(0xFF33333e),
@@ -631,7 +551,6 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
       body: Column(
         children: [
-          // Добавляем отступ сверху
           const SizedBox(height: 14),
           Expanded(
             child: _loading
