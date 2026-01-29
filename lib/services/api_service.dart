@@ -54,6 +54,22 @@ class ApiService {
     }
     return null;
   }
+  
+  Future<Map<String, dynamic>?> getUserPresence(int userId) async {
+    try {
+      final res = await http.get(
+        Uri.parse('$baseUrl/api/users/$userId/presence'),
+        headers: _headers,
+      );
+      if (res.statusCode == 200) {
+        return jsonDecode(res.body);
+      }
+      return null;
+    } catch (e) {
+      print('Failed to get user presence: $e');
+      return null;
+    }
+  }
 
   Future<List<dynamic>> searchUsers(String query) async {
     final res = await http.get(
@@ -108,7 +124,6 @@ class ApiService {
     );
   }
 
-  // Новый метод для очистки всех сообщений в чате
   Future<void> clearChatMessages(int chatId) async {
     final res = await http.post(
       Uri.parse('$baseUrl/api/chats/$chatId/clear'),

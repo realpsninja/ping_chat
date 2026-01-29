@@ -57,12 +57,31 @@ class _ChatsScreenState extends State<ChatsScreen> {
           final lastMessageData = chat['last_message'];
           String decryptedMessage = 'Нет сообщений';
           
-          if (lastMessageData != null && lastMessageData is String && lastMessageData.isNotEmpty) {
-            try {
-              final parsedMessage = jsonDecode(lastMessageData);
-              decryptedMessage = _decryptMessageContent(parsedMessage);
-            } catch (e) {
-              decryptedMessage = lastMessageData;
+          // Проверяем наличие данных о последнем сообщении
+          if (lastMessageData != null && lastMessageData != 'Нет сообщений') {
+            // Если это строка с JSON, пытаемся распарсить
+            if (lastMessageData is String && lastMessageData.isNotEmpty) {
+              // Проверяем, не является ли это уже расшифрованным текстом
+              if (lastMessageData.startsWith('{') && lastMessageData.contains('"data"')) {
+                // Это JSON - пытаемся расшифровать
+                try {
+                  final parsedMessage = jsonDecode(lastMessageData);
+                  decryptedMessage = _decryptMessageContent(parsedMessage);
+                } catch (e) {
+                  // Если не удалось распарсить как JSON, возможно это уже текст
+                  decryptedMessage = lastMessageData.length > 50 
+                      ? '${lastMessageData.substring(0, 50)}...' 
+                      : lastMessageData;
+                }
+              } else {
+                // Это уже текст
+                decryptedMessage = lastMessageData.length > 50 
+                    ? '${lastMessageData.substring(0, 50)}...' 
+                    : lastMessageData;
+              }
+            } else if (lastMessageData is Map) {
+              // Если это уже Map, пытаемся расшифровать
+              decryptedMessage = _decryptMessageContent(lastMessageData);
             }
           }
           
@@ -71,6 +90,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
             'last_message': decryptedMessage,
           };
         } catch (e) {
+          print('Error processing chat ${chat['id']}: $e');
           return {
             ...chat,
             'last_message': 'Нет сообщений',
@@ -78,6 +98,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
         }
       }));
       
+      // Сортируем по времени последнего сообщения
       processedChats.sort((a, b) {
         final timeA = DateTime.tryParse(a['last_message_time'] ?? '') ?? DateTime(1970);
         final timeB = DateTime.tryParse(b['last_message_time'] ?? '') ?? DateTime(1970);
@@ -181,31 +202,62 @@ class _ChatsScreenState extends State<ChatsScreen> {
 
   String _decryptMessageContent(dynamic messageData) {
     try {
-      if (messageData == null) return 'Нет сообщений';
-      
+      // Если messageData уже является строкой (уже расшифровано или просто текст)
       if (messageData is String) {
-        return messageData.isEmpty ? 'Нет сообщений' : messageData;
+        return messageData.isEmpty || messageData == 'Нет сообщений' 
+            ? 'Нет сообщений' 
+            : messageData;
       }
       
-      if (messageData is Map) {
-        final messageMap = Map<String, dynamic>.from(messageData);
+      // Если messageData не существует или пусто
+      if (messageData == null) {
+        return 'Нет сообщений';
+      }
+      
+      // Если messageData - это Map (JSON структура сообщения)
+      if (messageData is Map<String, dynamic>) {
+        final content = messageData['content'] ?? '';
+        final keys = messageData['encrypted_keys'];
         
-        final content = messageMap['content'] ?? messageMap['data'] ?? '';
-        final keys = messageMap['encrypted_keys'] ?? messageMap['encryptedKeys'];
-        
+        // Проверяем, есть ли вообще данные для расшифровки
         if (content.isEmpty || keys == null) {
           return 'Нет сообщений';
         }
         
-        Map<String, dynamic> contentJson;
-        if (content is String) {
+        // Пытаемся получить зашифрованные ключи
+        Map<String, dynamic> keysMap;
+        if (keys is String) {
           try {
-            contentJson = Map<String, dynamic>.from(jsonDecode(content));
+            keysMap = jsonDecode(keys);
           } catch (_) {
             return 'Нет сообщений';
           }
-        } else if (content is Map) {
-          contentJson = Map<String, dynamic>.from(content);
+        } else if (keys is Map<String, dynamic>) {
+          keysMap = keys;
+        } else {
+          return 'Нет сообщений';
+        }
+        
+        // Проверяем, есть ли ключ для текущего пользователя
+        if (_myUserId == null) {
+          return 'Зашифрованное сообщение';
+        }
+        
+        final myKey = keysMap[_myUserId.toString()];
+        if (myKey == null) {
+          return 'Зашифрованное сообщение';
+        }
+        
+        // Парсим контент
+        Map<String, dynamic> contentJson;
+        if (content is String) {
+          try {
+            contentJson = jsonDecode(content);
+          } catch (_) {
+            return 'Нет сообщений';
+          }
+        } else if (content is Map<String, dynamic>) {
+          contentJson = content;
         } else {
           return 'Нет сообщений';
         }
@@ -217,37 +269,25 @@ class _ChatsScreenState extends State<ChatsScreen> {
           return 'Нет сообщений';
         }
         
-        Map<String, dynamic> keysMap;
-        if (keys is String) {
-          try {
-            keysMap = Map<String, dynamic>.from(jsonDecode(keys));
-          } catch (_) {
-            return 'Нет сообщений';
-          }
-        } else if (keys is Map) {
-          keysMap = Map<String, dynamic>.from(keys);
-        } else {
-          return 'Нет сообщений';
-        }
-        
-        final myKey = keysMap[_myUserId.toString()];
-        if (myKey == null) {
+        try {
+          final decryptedAESKey = CryptoService().decryptAESKey(myKey.toString());
+          final result = _decryptWithAES(
+            encryptedData.toString(),
+            decryptedAESKey,
+            ivBase64.toString(),
+          );
+          
+          // Обрезаем слишком длинные сообщения для предпросмотра
+          return result.length > 50 ? '${result.substring(0, 50)}...' : result;
+        } catch (e) {
+          print('Decryption error in chat list: $e');
           return 'Зашифрованное сообщение';
         }
-        
-        final decryptedAESKey = CryptoService().decryptAESKey(myKey.toString());
-        
-        final result = _decryptWithAES(
-          encryptedData.toString(),
-          decryptedAESKey,
-          ivBase64.toString(),
-        );
-        
-        return result.length > 50 ? '${result.substring(0, 50)}...' : result;
       }
       
       return 'Нет сообщений';
     } catch (e) {
+      print('Error decrypting message content: $e');
       return 'Сообщение';
     }
   }
@@ -414,6 +454,9 @@ class _ChatsScreenState extends State<ChatsScreen> {
           actions: [
             PopupMenuButton<String>(
               icon: const Icon(Icons.more_vert, color: Colors.white),
+              color: const Color(0xFF33333e),
+              surfaceTintColor: Colors.transparent,
+              shadowColor: Colors.transparent,
               onSelected: (value) {
                 if (value == 'logout') {
                   _logout();
@@ -427,7 +470,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
                       children: [
                         Icon(Icons.logout, color: Colors.red),
                         SizedBox(width: 8),
-                        Text('Выйти'),
+                        Text('Выйти', style: TextStyle(color: Colors.white)),
                       ],
                     ),
                   ),
@@ -484,7 +527,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
                                     mainAxisAlignment: MainAxisAlignment.end,
                                     children: [
                                       Container(
-                                        margin: const EdgeInsets.symmetric(vertical: 8),
+                                        margin: const EdgeInsets.symmetric(vertical: 4),
                                         child: Row(
                                           children: [
                                             _buildActionButton(
@@ -493,7 +536,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
                                               label: 'Очистить',
                                               onTap: () => _clearChat(chat),
                                             ),
-                                            const SizedBox(width: 8),
+                                            const SizedBox(width: 6),
                                             _buildActionButton(
                                               icon: Icons.delete_forever,
                                               color: Colors.red,
@@ -513,7 +556,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
                             AnimatedContainer(
                               duration: const Duration(milliseconds: 200),
                               transform: Matrix4.translationValues(
-                                isSwipedOpen ? -170 : 0,
+                                isSwipedOpen ? -200 : 0,
                                 0,
                                 0,
                               ),

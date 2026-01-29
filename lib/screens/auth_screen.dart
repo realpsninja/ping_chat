@@ -334,6 +334,8 @@ class _AuthScreenState extends State<AuthScreen>
                           keyboardType: TextInputType.number,
                           style: const TextStyle(color: Colors.white),
                           decoration: _input('Пин-код'),
+                          maxLength: pinLength,
+                          maxLengthEnforcement: MaxLengthEnforcement.enforced,
                         ),
                         const SizedBox(height: 28),
                         _button(

@@ -42,6 +42,12 @@ class _ChatScreenState extends State<ChatScreen> {
   Timer? _autoDeleteTimer;
   DateTime? _firstMessageTime;
   StreamSubscription? _messageSubscription;
+  
+  // Добавляем новые поля для статуса онлайн
+  bool _isPartnerOnline = false;
+  DateTime? _partnerLastSeen;
+  StreamSubscription? _presenceSubscription;
+  Timer? _presenceTimer;
 
   @override
   void initState() {
@@ -55,6 +61,114 @@ class _ChatScreenState extends State<ChatScreen> {
     await _loadMessages();
     _listenToMessages();
     _startAutoDeleteTimer();
+    _initPresenceTracking(); // Добавляем инициализацию отслеживания присутствия
+  }
+  
+  // Добавляем метод для инициализации отслеживания присутствия
+  void _initPresenceTracking() {
+    // Получаем текущий статус партнера
+    _updatePartnerPresence();
+    
+    // Слушаем обновления статуса из сокета
+    _presenceSubscription = SocketService().presenceStream.listen((data) {
+      if (data['user_id'] == widget.partnerId) {
+        setState(() {
+          _isPartnerOnline = data['is_online'] ?? false;
+          if (data['last_seen'] != null) {
+            _partnerLastSeen = DateTime.parse(data['last_seen']);
+          }
+        });
+      }
+    });
+    
+    // Периодически обновляем статус (каждые 30 секунд)
+    _presenceTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      _updatePartnerPresence();
+    });
+    
+    // Также обновляем статус при возвращении на экран
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final routeObserver = ModalRoute.of(context);
+      routeObserver?.addScopedWillPopCallback(() async {
+        _updatePartnerPresence();
+        return true;
+      });
+    });
+  }
+  
+  // Метод для обновления статуса присутствия партнера
+  Future<void> _updatePartnerPresence() async {
+    try {
+      final presenceData = await ApiService().getUserPresence(widget.partnerId);
+      if (presenceData != null && mounted) {
+        setState(() {
+          _isPartnerOnline = presenceData['is_online'] ?? false;
+          if (presenceData['last_seen'] != null) {
+            _partnerLastSeen = DateTime.parse(presenceData['last_seen']);
+          }
+        });
+      }
+    } catch (e) {
+      print('Failed to update presence: $e');
+    }
+  }
+  
+  // Метод для форматирования времени последнего посещения
+  String _formatLastSeen() {
+    if (_isPartnerOnline) {
+      return 'Онлайн';
+    }
+    
+    if (_partnerLastSeen == null) {
+      return 'Был недавно';
+    }
+    
+    final now = DateTime.now();
+    final difference = now.difference(_partnerLastSeen!);
+    
+    if (difference.inSeconds < 60) {
+      return 'Был только что';
+    } else if (difference.inMinutes < 60) {
+      final minutes = difference.inMinutes;
+      return 'Был $minutes ${_getMinutesText(minutes)} назад';
+    } else if (difference.inHours < 24) {
+      final hours = difference.inHours;
+      return 'Был $hours ${_getHoursText(hours)} назад';
+    } else {
+      final days = difference.inDays;
+      if (days == 1) {
+        return 'Был вчера';
+      } else if (days < 7) {
+        return 'Был $days ${_getDaysText(days)} назад';
+      } else {
+        final formattedDate = '${_partnerLastSeen!.day.toString().padLeft(2, '0')}.'
+            '${_partnerLastSeen!.month.toString().padLeft(2, '0')}.'
+            '${_partnerLastSeen!.year}';
+        return 'Был $formattedDate';
+      }
+    }
+  }
+  
+  // Вспомогательные методы для правильного склонения
+  String _getMinutesText(int minutes) {
+    if (minutes % 10 == 1 && minutes % 100 != 11) return 'минуту';
+    if (minutes % 10 >= 2 && minutes % 10 <= 4 && 
+        (minutes % 100 < 10 || minutes % 100 >= 20)) return 'минуты';
+    return 'минут';
+  }
+  
+  String _getHoursText(int hours) {
+    if (hours % 10 == 1 && hours % 100 != 11) return 'час';
+    if (hours % 10 >= 2 && hours % 10 <= 4 && 
+        (hours % 100 < 10 || hours % 100 >= 20)) return 'часа';
+    return 'часов';
+  }
+  
+  String _getDaysText(int days) {
+    if (days % 10 == 1 && days % 100 != 11) return 'день';
+    if (days % 10 >= 2 && days % 10 <= 4 && 
+        (days % 100 < 10 || days % 100 >= 20)) return 'дня';
+    return 'дней';
   }
 
   Future<void> _loadMessages() async {
@@ -434,6 +548,8 @@ class _ChatScreenState extends State<ChatScreen> {
   void dispose() {
     _autoDeleteTimer?.cancel();
     _messageSubscription?.cancel();
+    _presenceSubscription?.cancel(); // Отписываемся от потока присутствия
+    _presenceTimer?.cancel(); // Отменяем таймер обновления статуса
     _messageController.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -449,17 +565,36 @@ class _ChatScreenState extends State<ChatScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(widget.partnerNickname, style: const TextStyle(color: Colors.white)),
-            if (_firstMessageTime != null && _messages.isNotEmpty)
-              Text(
-                'Авто удаление через ${10 - DateTime.now().difference(_firstMessageTime!).inMinutes}мин.',
-                style: const TextStyle(fontSize: 12, color: Colors.white70),
+            Text(
+              _formatLastSeen(), // Используем наш метод для отображения статуса
+              style: TextStyle(
+                fontSize: 12, 
+                color: _isPartnerOnline ? Colors.green : Colors.white70, // Зеленый если онлайн
               ),
+            ),
           ],
         ),
         iconTheme: const IconThemeData(color: Colors.white),
         actions: [
+          // Добавляем индикатор онлайн-статуса рядом с меню
+          Container(
+            margin: const EdgeInsets.only(right: 8),
+            child: _isPartnerOnline 
+                ? Container(
+                    width: 8,
+                    height: 8,
+                    decoration: const BoxDecoration(
+                      color: Colors.green,
+                      shape: BoxShape.circle,
+                    ),
+                  )
+                : null,
+          ),
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert, color: Colors.white),
+            color: const Color(0xFF33333e),
+            surfaceTintColor: Colors.transparent,
+            shadowColor: Colors.transparent,
             onSelected: (value) async {
               if (value == 'clear_chat') {
                 await _clearChatNow();
@@ -475,7 +610,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     children: [
                       Icon(Icons.delete_sweep, color: Colors.orange),
                       SizedBox(width: 8),
-                      Text('Очистить чат сейчас'),
+                      Text('Очистить чат сейчас', style: TextStyle(color: Colors.white)),
                     ],
                   ),
                 ),
@@ -485,7 +620,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     children: [
                       Icon(Icons.delete_forever, color: Colors.red),
                       SizedBox(width: 8),
-                      Text('Удалить чат полностью'),
+                      Text('Удалить чат полностью', style: TextStyle(color: Colors.white)),
                     ],
                   ),
                 ),

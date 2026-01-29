@@ -10,10 +10,12 @@ class SocketService {
   final _messageController = StreamController<Map<String, dynamic>>.broadcast();
   final _statusController = StreamController<Map<String, dynamic>>.broadcast();
   final _chatUpdateController = StreamController<Map<String, dynamic>>.broadcast();
+  final _presenceController = StreamController<Map<String, dynamic>>.broadcast();
 
   Stream<Map<String, dynamic>> get messageStream => _messageController.stream;
   Stream<Map<String, dynamic>> get statusStream => _statusController.stream;
   Stream<Map<String, dynamic>> get chatUpdateStream => _chatUpdateController.stream;
+  Stream<Map<String, dynamic>> get presenceStream => _presenceController.stream;
 
   void connect(String token) {
     _socket = IO.io(
@@ -58,6 +60,12 @@ class SocketService {
     _socket!.on('user_status_changed', (data) {
       print('Received user_status_changed: $data');
       _statusController.add(Map<String, dynamic>.from(data));
+      // Также отправляем в presenceController для удобства
+      _presenceController.add({
+        'user_id': data['userId'],
+        'is_online': data['isOnline'] ?? false,
+        'last_seen': data['lastSeen'] ?? DateTime.now().toIso8601String(),
+      });
     });
 
     _socket!.on('messages_cleared', (data) {
@@ -105,6 +113,12 @@ class SocketService {
         'data': data
       });
     });
+
+    // Добавляем обработчик для presence_update
+    _socket!.on('presence_update', (data) {
+      print('Received presence_update: $data');
+      _presenceController.add(Map<String, dynamic>.from(data));
+    });
   }
 
   void sendMessage(int chatId, String encryptedContent, Map<int, String> encryptedKeys) {
@@ -132,5 +146,6 @@ class SocketService {
     _messageController.close();
     _statusController.close();
     _chatUpdateController.close();
+    _presenceController.close();
   }
 }
