@@ -28,7 +28,7 @@ const pool = new Pool({
   user: 'messenger_user',
   host: 'localhost',
   database: 'messenger_db',
-  password: 'strong_pasc9t9f55g0g6g05g50@c84dc95#h0g60cr9#42=gt0g5f9f5960fd4#g0c959c4c4sword_here',
+  password: 'password_here',
   port: 5432,
 });
 
