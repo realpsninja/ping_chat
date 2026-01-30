@@ -9,7 +9,13 @@ import 'chats_screen.dart';
 
 class AuthScreen extends StatefulWidget {
   final String? savedNickname;
-  const AuthScreen({super.key, this.savedNickname});
+  final bool fromLogout; // Изменяем с nullable на non-nullable с дефолтным значением
+  
+  const AuthScreen({
+    super.key, 
+    this.savedNickname,
+    this.fromLogout = false, // Добавляем дефолтное значение
+  });
 
   @override
   State<AuthScreen> createState() => _AuthScreenState();
@@ -43,6 +49,19 @@ class _AuthScreenState extends State<AuthScreen>
     if (widget.savedNickname != null) {
       _isLogin = true;
       _nicknameController.text = widget.savedNickname!;
+    }
+    
+    // Используем widget.fromLogout без проверки на null
+    if (widget.fromLogout && mounted) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Вы успешно вышли из аккаунта'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      });
     }
   }
 

@@ -71,6 +71,15 @@ class ApiService {
     }
   }
 
+  Future<bool> isUserOnline(int userId) async {
+    try {
+      final presenceData = await getUserPresence(userId);
+      return presenceData?['is_online'] ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<List<dynamic>> searchUsers(String query) async {
     final res = await http.get(
       Uri.parse('$baseUrl/api/users/search?q=$query'),
@@ -149,7 +158,7 @@ class ApiService {
       throw Exception('Failed to clear chat messages');
     }
   }
-  
+
   Future<void> deleteAccount() async {
     final res = await http.delete(
       Uri.parse('$baseUrl/api/account'),
@@ -157,8 +166,13 @@ class ApiService {
     );
     
     if (res.statusCode != 200) {
-      final error = jsonDecode(res.body)['error'] ?? 'Failed to delete account';
+      final response = jsonDecode(res.body);
+      final error = response['error'] ?? 'Failed to delete account';
       throw Exception(error);
     }
+    
+    // Очищаем токен после успешного удаления
+    _token = null;
   }
+
 }

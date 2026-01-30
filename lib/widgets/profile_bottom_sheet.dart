@@ -4,6 +4,7 @@ import '../services/chat_actions_service.dart';
 import '../services/api_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/socket_service.dart';
+import '../screens/auth_screen.dart'; // Добавляем импорт
 
 class ProfileBottomSheet {
   static void show({
@@ -51,6 +52,7 @@ class _ProfileBottomSheetContent extends StatefulWidget {
 
 class _ProfileBottomSheetContentState extends State<_ProfileBottomSheetContent> {
   bool _deletingAccount = false;
+  bool _loggingOut = false;
 
   Future<void> _deleteAccount() async {
     final confirmed = await CustomNavigationBar.showConfirmationDialog(
@@ -66,19 +68,31 @@ class _ProfileBottomSheetContentState extends State<_ProfileBottomSheetContent> 
     setState(() => _deletingAccount = true);
     
     try {
-      // TODO: Реализовать эндпоинт для удаления аккаунта на сервере
-      // await ApiService().deleteAccount();
+      // Используем существующий эндпоинт
+      await ApiService().deleteAccount();
       
-      // Показываем сообщение о разработке
+      // Очищаем локальные данные
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.clear();
+      SocketService().disconnect();
+      
       if (context.mounted) {
+        // Показываем уведомление об успехе
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Функция удаления аккаунта в разработке'),
-            backgroundColor: Colors.orange,
+            content: Text('Аккаунт успешно удален'),
+            backgroundColor: Colors.green,
             duration: Duration(seconds: 2),
           ),
         );
-        Navigator.pop(context);
+        
+        // Закрываем bottom sheet и переходим на экран авторизации
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(
+            builder: (context) => const AuthScreen(),
+          ),
+          (route) => false,
+        );
       }
     } catch (e) {
       if (context.mounted) {
@@ -107,14 +121,35 @@ class _ProfileBottomSheetContentState extends State<_ProfileBottomSheetContent> 
     
     if (!confirmed) return;
     
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.clear();
-    SocketService().disconnect();
+    setState(() => _loggingOut = true);
     
-    if (context.mounted) {
-      Navigator.pop(context); // Закрываем bottom sheet
-      // TODO: Переход на экран авторизации
-      // Navigator.pushReplacement(...)
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.clear();
+      SocketService().disconnect();
+      
+      if (context.mounted) {
+        // Закрываем bottom sheet и переходим на экран авторизации
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(
+            builder: (context) => const AuthScreen(),
+          ),
+          (route) => false,
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Ошибка выхода: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _loggingOut = false);
+      }
     }
   }
 
@@ -186,13 +221,11 @@ class _ProfileBottomSheetContentState extends State<_ProfileBottomSheetContent> 
                 ),
                 
                 // Кнопка выхода
-                IconButton(
-                  onPressed: _logout,
-                  icon: Icon(
-                    Icons.logout,
-                    color: Colors.red[400],
-                    size: 24,
-                  ),
+                _loadingButton(
+                  isLoading: _loggingOut,
+                  icon: Icons.logout,
+                  color: Colors.red[400]!,
+                  onTap: _logout,
                   tooltip: 'Выйти из аккаунта',
                 ),
               ],
@@ -309,5 +342,29 @@ class _ProfileBottomSheetContentState extends State<_ProfileBottomSheetContent> 
           : const Icon(Icons.chevron_right, color: Colors.grey),
       onTap: isLoading ? null : onTap,
     );
+  }
+
+  Widget _loadingButton({
+    required bool isLoading,
+    required IconData icon,
+    required Color color,
+    required VoidCallback onTap,
+    required String tooltip,
+  }) {
+    return isLoading
+        ? Container(
+            width: 48,
+            height: 48,
+            padding: const EdgeInsets.all(12),
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              valueColor: AlwaysStoppedAnimation<Color>(color),
+            ),
+          )
+        : IconButton(
+            onPressed: onTap,
+            icon: Icon(icon, color: color, size: 24),
+            tooltip: tooltip,
+          );
   }
 }

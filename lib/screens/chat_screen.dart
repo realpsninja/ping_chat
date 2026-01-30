@@ -54,6 +54,9 @@ class _ChatScreenState extends State<ChatScreen> {
   void initState() {
     super.initState();
     _init();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _updatePartnerPresence();
+    });
   }
 
   Future<void> _init() async {
@@ -211,6 +214,22 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _sendMessage() async {
+    // Проверяем, что собеседник онлайн
+    if (!_isPartnerOnline) {
+      final statusText = StatusUtils.formatLastSeen(_partnerLastSeen, _isPartnerOnline);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '${widget.partnerNickname} сейчас не в сети ($statusText). '
+            'Сообщение можно отправить только когда пользователь онлайн.',
+          ),
+          duration: const Duration(seconds: 3),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
     final text = _messageController.text.trim();
     if (text.isEmpty) return;
 
@@ -552,7 +571,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       Icon(Icons.delete_forever, color: Colors.red),
                       SizedBox(width: 8),
                       Text('Удалить чат полностью', style: TextStyle(color: Colors.white)),
-                    ],
+                      ],
                   ),
                 ),
               ];
@@ -563,81 +582,28 @@ class _ChatScreenState extends State<ChatScreen> {
       body: Column(
         children: [
           const SizedBox(height: 14),
+          // ИСПРАВЛЕНИЕ 1: Stack для размещения уведомления поверх контента
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
-                : _messages.isEmpty
-                    ? const Center(child: Text('Нет сообщений', style: TextStyle(color: Colors.white)))
-                    : ListView.builder(
-                        controller: _scrollController,
-                        itemCount: _messages.length,
-                        addAutomaticKeepAlives: true,
-                        cacheExtent: 1000,
-                        itemBuilder: (context, index) {
-                          final msg = _messages[index];
-                          final isMine = msg['sender_id'] == _myUserId;
-                          final decrypted = _decryptMessage(msg);
-
-                          return Align(
-                            alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
-                            child: Container(
-                              margin: const EdgeInsets.symmetric(
-                                  horizontal: 8,
-                                  vertical: 3,
-                              ),
-                              padding: const EdgeInsets.all(12),
-                              constraints: BoxConstraints(
-                                maxWidth: MediaQuery.of(context).size.width * 0.75,
-                              ),
-                              decoration: BoxDecoration(
-                                color: isMine 
-                                  ? const Color(0xFF7474d6)
-                                  : const Color(0xFF474747),
-                                borderRadius: BorderRadius.only(
-                                  topLeft: const Radius.circular(14),
-                                  topRight: const Radius.circular(14),
-                                  bottomLeft: const Radius.circular(14),
-                                  bottomRight: const Radius.circular(0),
-                                ),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                children: [
-                                  Flexible(
-                                    child: Text(
-                                      decrypted,
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 15,
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Padding(
-                                    padding: const EdgeInsets.only(bottom: 0),
-                                    child: Text(
-                                      _formatTime(msg['timestamp']),
-                                      style: const TextStyle(
-                                        fontSize: 10,
-                                        color: Colors.white70,
-                                        height: 1.0,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          );
-                        },
-                      ),
+                : Stack(
+                    children: [
+                      // Список сообщений
+                      _buildMessagesList(),
+                      // Уведомление о статусе поверх списка (по центру)
+                      if (!_isPartnerOnline) _buildCenterStatusNotification(),
+                    ],
+                  ),
           ),
           const SizedBox(height: 14),
+          // ИСПРАВЛЕНИЕ 2: Поле ввода неактивно когда пользователь оффлайн
           Padding(
             padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
             child: Container(
               decoration: BoxDecoration(
-                color: const Color(0xFF2f2f2f),
+                color: _isPartnerOnline 
+                    ? const Color(0xFF2f2f2f) 
+                    : const Color(0xFF2f2f2f).withOpacity(0.5), // Визуально показываем неактивность
                 borderRadius: BorderRadius.circular(16),
               ),
               child: Row(
@@ -645,23 +611,33 @@ class _ChatScreenState extends State<ChatScreen> {
                   Expanded(
                     child: TextField(
                       controller: _messageController,
+                      enabled: _isPartnerOnline, // Блокируем поле если оффлайн
                       maxLines: 6,
                       minLines: 1,
-                      decoration: const InputDecoration(
-                        hintText: 'Введите сообщение...',
-                        hintStyle: TextStyle(color: Colors.white70),
+                      decoration: InputDecoration(
+                        hintText: _isPartnerOnline 
+                            ? 'Введите сообщение...' 
+                            : 'Пользователь не в сети',
+                        hintStyle: TextStyle(
+                          color: _isPartnerOnline 
+                              ? Colors.white70 
+                              : Colors.white38,
+                        ),
                         border: InputBorder.none,
-                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                       ),
                       style: const TextStyle(color: Colors.white),
-                      onSubmitted: (_) => _sendMessage(),
+                      onSubmitted: _isPartnerOnline ? (_) => _sendMessage() : null,
                     ),
                   ),
                   Padding(
                     padding: const EdgeInsets.only(right: 8),
                     child: IconButton(
-                      icon: const Icon(Icons.send, color: Colors.white),
-                      onPressed: _sendMessage,
+                      icon: Icon(
+                        Icons.send, 
+                        color: _isPartnerOnline ? Colors.white : Colors.white38,
+                      ),
+                      onPressed: _isPartnerOnline ? _sendMessage : null, // Блокируем кнопку
                     ),
                   ),
                 ],
@@ -669,6 +645,152 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+  
+  // Список сообщений БЕЗ уведомления о статусе
+  Widget _buildMessagesList() {
+    if (_messages.isEmpty) {
+      return const Center(
+        child: Text(
+          'Нет сообщений', 
+          style: TextStyle(color: Colors.white),
+        ),
+      );
+    }
+    
+    return ListView.builder(
+      controller: _scrollController,
+      itemCount: _messages.length,
+      addAutomaticKeepAlives: true,
+      cacheExtent: 1000,
+      itemBuilder: (context, index) {
+        final msg = _messages[index];
+        final isMine = msg['sender_id'] == _myUserId;
+        final decrypted = _decryptMessage(msg);
+
+        return Align(
+          alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
+          child: Container(
+            margin: const EdgeInsets.symmetric(
+              horizontal: 8,
+              vertical: 3,
+            ),
+            padding: const EdgeInsets.all(12),
+            constraints: BoxConstraints(
+              maxWidth: MediaQuery.of(context).size.width * 0.75,
+            ),
+            decoration: BoxDecoration(
+              color: isMine 
+                ? const Color(0xFF7474d6)
+                : const Color(0xFF474747),
+              borderRadius: BorderRadius.only(
+                topLeft: const Radius.circular(14),
+                topRight: const Radius.circular(14),
+                bottomLeft: const Radius.circular(14),
+                bottomRight: const Radius.circular(0),
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Flexible(
+                  child: Text(
+                    decrypted,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 0),
+                  child: Text(
+                    _formatTime(msg['timestamp']),
+                    style: const TextStyle(
+                      fontSize: 10,
+                      color: Colors.white70,
+                      height: 1.0,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+  
+  // ИСПРАВЛЕНИЕ 3: Уведомление о статусе по центру экрана
+  Widget _buildCenterStatusNotification() {
+    final statusText = StatusUtils.formatLastSeen(_partnerLastSeen, _isPartnerOnline);
+    
+    return Center(
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 20),
+        padding: const EdgeInsets.all(16),
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(context).size.width * 0.85,
+        ),
+        decoration: BoxDecoration(
+          color: const Color(0xFF2a2a2a),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: Colors.orange.withOpacity(0.4),
+            width: 2,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.3),
+              blurRadius: 10,
+              spreadRadius: 2,
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.info_outline,
+              color: Colors.orange,
+              size: 32,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              '${widget.partnerNickname} не в сети',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              statusText,
+              style: TextStyle(
+                color: Colors.white70,
+                fontSize: 13,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 12),
+            // ИСПРАВЛЕНИЕ 4: Убираем maxLines и overflow для полного отображения текста
+            Text(
+              'Сообщения можно отправлять только когда пользователь онлайн.',
+              style: const TextStyle(
+                color: Colors.orange,
+                fontSize: 13,
+              ),
+              textAlign: TextAlign.center,
+              // Убрали maxLines и overflow - текст будет полностью виден
+            ),
+          ],
+        ),
       ),
     );
   }
