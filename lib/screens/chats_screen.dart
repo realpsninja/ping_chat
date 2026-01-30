@@ -419,13 +419,13 @@ class _ChatsScreenState extends State<ChatsScreen> {
               'Ваши чаты',
               style: TextStyle(
                 color: Colors.white,
-                fontSize: 20, // Уменьшенный размер
+                fontSize: 19, // Уменьшенный размер
                 fontWeight: FontWeight.bold,
               ),
             ),
             if (_nickname != null && _nickname!.isNotEmpty)
               Text(
-                _nickname!,
+                'Ваш никнейм: ${_nickname!}',
                 style: const TextStyle(
                   color: Colors.grey,
                   fontSize: 14, // Меньший размер для ника

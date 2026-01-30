@@ -11,7 +11,7 @@ const server = http.createServer(app);
 
 const io = socketIo(server, {
   cors: {
-    origin: "https://plugins.timeto.watch",
+    origin: "https://your_domain.com",
     methods: ["GET", "POST"],
     credentials: true
   },
@@ -28,7 +28,7 @@ const pool = new Pool({
   user: 'messenger_user',
   host: 'localhost',
   database: 'messenger_db',
-  password: 'password_here',
+  password: 'password_database',
   port: 5432,
 });
 
@@ -283,6 +283,72 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
+// Эндпоинт для удаления аккаунта
+app.delete('/api/account', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    console.log(`[ACCOUNT] Начало удаления аккаунта ${userId} (${req.user.nickname})`);
+    
+    // 1. Получаем все чаты пользователя
+    const chatsResult = await pool.query(
+      'SELECT id, user1_id, user2_id FROM chats WHERE user1_id = $1 OR user2_id = $1',
+      [userId]
+    );
+    
+    console.log(`[ACCOUNT] У пользователя ${userId} найдено ${chatsResult.rows.length} чатов`);
+    
+    // 2. Уведомляем всех участников чатов об удалении
+    for (const chat of chatsResult.rows) {
+      const otherUserId = chat.user1_id === userId ? chat.user2_id : chat.user1_id;
+      
+      // Отправляем уведомление через сокеты
+      if (otherUserId) {
+        const socketId = onlineUsers.get(otherUserId);
+        if (socketId) {
+          io.to(socketId).emit('chat_deleted', {
+            chatId: chat.id,
+            deletedBy: userId,
+            reason: 'account_deleted'
+          });
+        }
+        
+        console.log(`[ACCOUNT] Уведомлен пользователь ${otherUserId} об удалении чата ${chat.id}`);
+      }
+    }
+    
+    // 3. Удаляем все сообщения пользователя
+    await pool.query('DELETE FROM messages WHERE sender_id = $1', [userId]);
+    console.log(`[ACCOUNT] Удалены все сообщения пользователя ${userId}`);
+    
+    // 4. Удаляем все чаты пользователя
+    await pool.query('DELETE FROM chats WHERE user1_id = $1 OR user2_id = $1', [userId]);
+    console.log(`[ACCOUNT] Удалены все чаты пользователя ${userId}`);
+    
+    // 5. Удаляем сам аккаунт
+    await pool.query('DELETE FROM users WHERE id = $1', [userId]);
+    console.log(`[ACCOUNT] Аккаунт ${userId} успешно удален`);
+    
+    // 6. Удаляем из онлайн пользователей
+    onlineUsers.delete(userId);
+    
+    // 7. Рассылаем уведомление о том, что пользователь вышел из сети
+    broadcastUserPresence(userId, false, new Date().toISOString());
+    
+    res.json({
+      success: true,
+      message: 'Account deleted successfully'
+    });
+    
+  } catch (error) {
+    console.error('[ACCOUNT] Ошибка удаления аккаунта:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to delete account',
+      details: error.message 
+    });
+  }
+});
+
 app.get('/api/users/search', authenticateToken, async (req, res) => {
   const { q } = req.query;
 
@@ -410,7 +476,6 @@ app.post('/api/chats/start', authenticateToken, async (req, res) => {
   }
 });
 
-// Упрощенная версия эндпоинта для получения чатов (работает без read_at)
 app.get('/api/chats', authenticateToken, async (req, res) => {
   try {
     console.log(`[DEBUG] Запрос чатов для пользователя ${req.user.userId} (${req.user.nickname})`);
@@ -463,14 +528,14 @@ app.get('/api/chats', authenticateToken, async (req, res) => {
           [chat.id]
         );
         
-        // Считаем ВСЕ сообщения от собеседника как "непрочитанные" 
-        // (так как колонки read_at может не быть)
-        const messagesFromPartner = await pool.query(
+        // Считаем НЕПРОЧИТАННЫЕ сообщения от собеседника (где read_at IS NULL)
+        const unreadMessagesResult = await pool.query(
           `SELECT COUNT(*) as count 
            FROM messages 
            WHERE chat_id = $1 
              AND is_deleted = false 
-             AND sender_id != $2`,
+             AND sender_id != $2
+             AND read_at IS NULL`,
           [chat.id, req.user.userId]
         );
         
@@ -479,16 +544,15 @@ app.get('/api/chats', authenticateToken, async (req, res) => {
           last_message: lastMessageResult.rows[0]?.content || null,
           last_message_time: lastMessageResult.rows[0]?.timestamp || null,
           last_message_sender_id: lastMessageResult.rows[0]?.sender_id || null,
-          unread_count: parseInt(messagesFromPartner.rows[0]?.count || 0)
+          unread_count: parseInt(unreadMessagesResult.rows[0]?.count || 0)
         };
         
         chatsWithDetails.push(chatWithDetails);
         
-        console.log(`[DEBUG] Чат ${chat.id}: партнер=${chat.partner_nickname}, сообщений=${messagesFromPartner.rows[0]?.count || 0}`);
+        console.log(`[DEBUG] Чат ${chat.id}: партнер=${chat.partner_nickname}, непрочитанных=${unreadMessagesResult.rows[0]?.count || 0}`);
         
       } catch (error) {
         console.error(`[ERROR] Ошибка при обработке чата ${chat.id}:`, error);
-        // Добавляем чат без деталей
         chatsWithDetails.push({
           ...chat,
           last_message: null,
@@ -555,14 +619,88 @@ app.get('/api/chats/:chatId/messages', authenticateToken, async (req, res) => {
 
     const result = await pool.query(query, params);
 
+    // ВАЖНО: Нормализуем encrypted_keys для всех сообщений
+    const normalizedMessages = result.rows.map(msg => {
+      const normalizedKeys = {};
+      if (msg.encrypted_keys && typeof msg.encrypted_keys === 'object') {
+        for (const [key, value] of Object.entries(msg.encrypted_keys)) {
+          const numericKey = parseInt(key);
+          if (!isNaN(numericKey)) {
+            normalizedKeys[numericKey] = value;
+          }
+        }
+      }
+      
+      return {
+        ...msg,
+        encrypted_keys: normalizedKeys
+      };
+    });
+
     res.json({
       success: true,
-      messages: result.rows.reverse()
+      messages: normalizedMessages.reverse()
     });
 
   } catch (error) {
     console.error('Get messages error:', error);
     res.status(500).json({ error: 'Failed to get messages' });
+  }
+});
+
+// Отметить сообщения как прочитанные
+app.post('/api/chats/:chatId/mark-read', authenticateToken, async (req, res) => {
+  const { chatId } = req.params;
+
+  try {
+    // Проверяем доступ к чату
+    const chatCheck = await pool.query(
+      'SELECT * FROM chats WHERE id = $1 AND (user1_id = $2 OR user2_id = $2)',
+      [chatId, req.user.userId]
+    );
+
+    if (chatCheck.rows.length === 0) {
+      return res.status(403).json({ error: 'Access denied to this chat' });
+    }
+
+    // Отмечаем все непрочитанные сообщения от собеседника как прочитанные
+    const result = await pool.query(
+      `UPDATE messages 
+       SET read_at = NOW() 
+       WHERE chat_id = $1 
+         AND sender_id != $2 
+         AND read_at IS NULL 
+         AND is_deleted = false
+       RETURNING id`,
+      [chatId, req.user.userId]
+    );
+
+    console.log(`[READ] User ${req.user.userId} marked ${result.rows.length} messages as read in chat ${chatId}`);
+
+    // Уведомляем отправителя о прочтении через WebSocket
+    if (result.rows.length > 0) {
+      const chat = chatCheck.rows[0];
+      const partnerId = chat.user1_id === req.user.userId ? chat.user2_id : chat.user1_id;
+      const partnerSocketId = onlineUsers.get(partnerId);
+      
+      if (partnerSocketId) {
+        io.to(partnerSocketId).emit('messages_read', {
+          chatId: parseInt(chatId),
+          readBy: req.user.userId,
+          messageIds: result.rows.map(r => r.id),
+          timestamp: new Date().toISOString()
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      markedCount: result.rows.length
+    });
+
+  } catch (error) {
+    console.error('Mark messages as read error:', error);
+    res.status(500).json({ error: 'Failed to mark messages as read' });
   }
 });
 
@@ -777,18 +915,31 @@ io.on('connection', async (socket) => {
         return socket.emit('error', { message: 'Access denied to this chat' });
       }
   
+      // ВАЖНО: Нормализуем ключи - всегда преобразуем в числа
+      const normalizedKeys = {};
+      if (encryptedKeys && typeof encryptedKeys === 'object') {
+        for (const [key, value] of Object.entries(encryptedKeys)) {
+          const numericKey = parseInt(key);
+          if (!isNaN(numericKey)) {
+            normalizedKeys[numericKey] = value;
+          }
+        }
+      }
+  
       const result = await pool.query(
         'INSERT INTO messages (chat_id, sender_id, content, encrypted_keys, timestamp, is_deleted) VALUES ($1, $2, $3, $4, NOW(), false) RETURNING *',
-        [chatId, socket.userId, content, JSON.stringify(encryptedKeys || {})]
+        [chatId, socket.userId, content, JSON.stringify(normalizedKeys)]
       );
   
       const message = {
         ...result.rows[0],
-        sender_nickname: socket.nickname
+        sender_nickname: socket.nickname,
+        // Возвращаем числовые ключи
+        encrypted_keys: normalizedKeys
       };
   
       io.to(`chat_${chatId}`).emit('new_message', message);
-
+  
     } catch (error) {
       console.error('Send message error:', error);
       socket.emit('error', { message: 'Failed to send message' });

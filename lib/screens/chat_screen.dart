@@ -63,6 +63,8 @@ class _ChatScreenState extends State<ChatScreen> {
     _listenToMessages();
     _startAutoDeleteTimer();
     _initPresenceTracking();
+    
+    await _markMessagesAsRead();
   }
   
   void _initPresenceTracking() {
@@ -119,6 +121,15 @@ class _ChatScreenState extends State<ChatScreen> {
       setState(() => _loading = false);
     }
   }
+
+  Future<void> _markMessagesAsRead() async {
+    try {
+      await ApiService().markMessagesAsRead(widget.chatId);
+      print('[READ] Messages marked as read for chat ${widget.chatId}');
+    } catch (e) {
+      print('[READ] Failed to mark messages as read: $e');
+    }
+  } 
 
   void _listenToMessages() {
     _messageSubscription = SocketService().messageStream.listen((data) {

@@ -110,6 +110,22 @@ class ApiService {
     return jsonDecode(res.body)['messages'];
   }
 
+  Future<void> markMessagesAsRead(int chatId) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$baseUrl/api/chats/$chatId/mark-read'),
+        headers: _headers,
+      );
+      
+      if (res.statusCode != 200) {
+        throw Exception('Failed to mark messages as read');
+      }
+    } catch (e) {
+      print('Mark messages as read error: $e');
+      rethrow;
+    }
+  }
+
   Future<void> deleteMessage(int messageId) async {
     await http.delete(
       Uri.parse('$baseUrl/api/messages/$messageId'),

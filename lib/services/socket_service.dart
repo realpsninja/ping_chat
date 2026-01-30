@@ -42,6 +42,15 @@ class SocketService {
         'data': message
       });
     });
+    
+    _socket!.on('messages_read', (data) {
+      print('Received messages_read: $data');
+      _chatUpdateController.add({
+        'type': 'messages_read',
+        'chatId': data['chatId'],
+        'data': data
+      });
+    });   
 
     _socket!.on('message_deleted', (data) {
       print('Received message_deleted: $data');
