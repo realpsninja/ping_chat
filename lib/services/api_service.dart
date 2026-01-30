@@ -133,4 +133,16 @@ class ApiService {
       throw Exception('Failed to clear chat messages');
     }
   }
+  
+  Future<void> deleteAccount() async {
+    final res = await http.delete(
+      Uri.parse('$baseUrl/api/account'),
+      headers: _headers,
+    );
+    
+    if (res.statusCode != 200) {
+      final error = jsonDecode(res.body)['error'] ?? 'Failed to delete account';
+      throw Exception(error);
+    }
+  }
 }

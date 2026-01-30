@@ -5,6 +5,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
 import '../services/socket_service.dart';
 import '../services/crypto_service.dart';
+import '../services/chat_actions_service.dart';
+import '../widgets/custom_navigation_bar.dart';
 import 'package:encrypt/encrypt.dart' as enc;
 import 'dart:typed_data';
 import 'chat_screen.dart';
@@ -29,11 +31,12 @@ class _ChatsScreenState extends State<ChatsScreen> {
   Timer? _refreshTimer;
   final Map<int, int> _unreadCounts = {};
   
-  // Добавляем поля для статуса онлайн партнеров
   final Map<int, bool> _partnerOnlineStatus = {};
   final Map<int, DateTime?> _partnerLastSeen = {};
   Timer? _statusTimer;
   StreamSubscription? _presenceSubscription;
+  
+  int _currentIndex = 0;
 
   @override
   void initState() {
@@ -122,10 +125,8 @@ class _ChatsScreenState extends State<ChatsScreen> {
   }
 
   void _initPresenceTracking() {
-    // Обновляем статусы при загрузке
     _updateAllPartnerStatuses();
     
-    // Слушаем обновления статуса из сокета
     _presenceSubscription = SocketService().presenceStream.listen((data) {
       final partnerId = data['user_id'];
       final isOnline = data['is_online'] ?? false;
@@ -139,7 +140,6 @@ class _ChatsScreenState extends State<ChatsScreen> {
       });
     });
     
-    // Периодически обновляем статус (каждые 30 секунд)
     _statusTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       _updateAllPartnerStatuses();
     });
@@ -275,40 +275,6 @@ class _ChatsScreenState extends State<ChatsScreen> {
     ).then((_) => _loadChats());
   }
 
-  Future<void> _logout() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF2a2a2a),
-        title: const Text(
-          'Выйти из аккаунта?',
-          style: TextStyle(color: Colors.white),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Отмена', style: TextStyle(color: Colors.white70)),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Выйти', style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
-    );
-    
-    if (confirmed == true) {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.clear();
-      SocketService().disconnect();
-      if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const AuthScreen(savedNickname: null)),
-      );
-    }
-  }
-
   String _formatTime(String? timestamp) {
     if (timestamp == null || timestamp.isEmpty) return '';
     try {
@@ -420,116 +386,22 @@ class _ChatsScreenState extends State<ChatsScreen> {
     }
   }
 
-  Future<void> _deleteChat(dynamic chat) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF2a2a2a),
-        title: const Text(
-          'Удалить чат?',
-          style: TextStyle(color: Colors.white),
-        ),
-        content: Text(
-          'Чат с ${chat['partner_nickname']} будет удален у всех участников.\nЭто действие нельзя отменить.',
-          style: TextStyle(color: Colors.grey[300]),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Отмена', style: TextStyle(color: Colors.white70)),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Удалить', style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
-    );
-    
-    if (confirmed == true) {
-      try {
-        await ApiService().deleteChat(chat['id']);
-        
-        setState(() {
-          _chats.removeWhere((c) => c['id'] == chat['id']);
-          _unreadCounts.remove(chat['id']);
-        });
-        
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Чат с ${chat['partner_nickname']} удален'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      } catch (e) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Ошибка удаления: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-  }
+  // Обработка навигации
+  void _onNavigationItemSelected(int index) {
+    setState(() {
+      _currentIndex = index;
+    });
 
-  Future<void> _clearChat(dynamic chat) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF2a2a2a),
-        title: const Text(
-          'Очистить чат?',
-          style: TextStyle(color: Colors.white),
-        ),
-        content: Text(
-          'Все сообщения в чате с ${chat['partner_nickname']} будут удалены у всех участников.\nЭто действие нельзя отменить.',
-          style: TextStyle(color: Colors.grey[300]),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Отмена', style: TextStyle(color: Colors.white70)),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Очистить', style: TextStyle(color: Colors.orange)),
-          ),
-        ],
-      ),
-    );
-    
-    if (confirmed == true) {
-      try {
-        await ApiService().clearChatMessages(chat['id']);
-        
-        setState(() {
-          final index = _chats.indexWhere((c) => c['id'] == chat['id']);
-          if (index != -1) {
-            _chats[index]['last_message'] = 'Нет сообщений';
-            _chats[index]['last_message_time'] = null;
-            _chats[index]['unread_count'] = 0;
-            _unreadCounts.remove(chat['id']);
-          }
-        });
-        
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Чат с ${chat['partner_nickname']} очищен'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      } catch (e) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Ошибка очистки: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
+    switch (index) {
+      case 0: // Чаты (уже на этой странице)
+        break;
+      case 1: // Поиск
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const SearchScreen()),
+        ).then((_) => _loadChats());
+        setState(() => _currentIndex = 0);
+        break;
     }
   }
 
@@ -538,36 +410,48 @@ class _ChatsScreenState extends State<ChatsScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFF1c1c1c),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF202020),
-        title: Text(
-          _nickname ?? 'Чаты',
-          style: const TextStyle(color: Colors.white),
-        ),
-        actions: [
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert, color: Colors.white),
-            color: const Color(0xFF33333e),
-            surfaceTintColor: Colors.transparent,
-            shadowColor: Colors.transparent,
-            onSelected: (value) {
-              if (value == 'logout') {
-                _logout();
-              }
-            },
-            itemBuilder: (BuildContext context) {
-              return [
-                const PopupMenuItem<String>(
-                  value: 'logout',
-                  child: Row(
-                    children: [
-                      Icon(Icons.logout, color: Colors.red),
-                      SizedBox(width: 8),
-                      Text('Выйти', style: TextStyle(color: Colors.white)),
-                    ],
-                  ),
+        backgroundColor: const Color(0xFF1c1c1c),
+        elevation: 0,
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Ваши чаты',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 20, // Уменьшенный размер
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            if (_nickname != null && _nickname!.isNotEmpty)
+              Text(
+                _nickname!,
+                style: const TextStyle(
+                  color: Colors.grey,
+                  fontSize: 14, // Меньший размер для ника
+                  fontWeight: FontWeight.normal,
                 ),
-              ];
-            },
+              ),
+          ],
+        ),
+        centerTitle: false,
+        actions: [
+          Container(
+            margin: const EdgeInsets.only(right: 8),
+            child: CircleAvatar(
+              backgroundColor: const Color(0xFF2a2a2a),
+              radius: 20,
+              child: IconButton(
+                icon: const Icon(Icons.search, color: Colors.white, size: 22),
+                padding: EdgeInsets.zero,
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const SearchScreen()),
+                  ).then((_) => _loadChats());
+                },
+              ),
+            ),
           ),
         ],
       ),
@@ -608,13 +492,18 @@ class _ChatsScreenState extends State<ChatsScreen> {
                         child: ListTile(
                           contentPadding: const EdgeInsets.symmetric(
                             horizontal: 16,
-                            vertical: 8,
+                            vertical: 12,
                           ),
                           leading: CircleAvatar(
                             backgroundColor: const Color(0xFF7474d6),
+                            radius: 24,
                             child: Text(
                               (chat['partner_nickname'] ?? '?')[0].toUpperCase(),
-                              style: const TextStyle(color: Colors.white),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
                           ),
                           title: Row(
@@ -625,6 +514,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
                                   style: const TextStyle(
                                     color: Colors.white,
                                     fontWeight: FontWeight.bold,
+                                    fontSize: 16,
                                   ),
                                 ),
                               ),
@@ -707,9 +597,24 @@ class _ChatsScreenState extends State<ChatsScreen> {
                                           'Удалить все сообщения у всех участников',
                                           style: TextStyle(color: Colors.grey),
                                         ),
-                                        onTap: () {
+                                        onTap: () async {
                                           Navigator.pop(context);
-                                          _clearChat(chat);
+                                          final success = await ChatActionsService.clearChat(
+                                            context,
+                                            chat['id'],
+                                            chat['partner_nickname'],
+                                          );
+                                          if (success && mounted) {
+                                            final index = _chats.indexWhere((c) => c['id'] == chat['id']);
+                                            if (index != -1) {
+                                              setState(() {
+                                                _chats[index]['last_message'] = 'Нет сообщений';
+                                                _chats[index]['last_message_time'] = null;
+                                                _chats[index]['unread_count'] = 0;
+                                                _unreadCounts.remove(chat['id']);
+                                              });
+                                            }
+                                          }
                                         },
                                       ),
                                       ListTile(
@@ -722,9 +627,19 @@ class _ChatsScreenState extends State<ChatsScreen> {
                                           'Удалить чат полностью у всех участников',
                                           style: TextStyle(color: Colors.grey),
                                         ),
-                                        onTap: () {
+                                        onTap: () async {
                                           Navigator.pop(context);
-                                          _deleteChat(chat);
+                                          final success = await ChatActionsService.deleteChat(
+                                            context,
+                                            chat['id'],
+                                            chat['partner_nickname'],
+                                          );
+                                          if (success && mounted) {
+                                            setState(() {
+                                              _chats.removeWhere((c) => c['id'] == chat['id']);
+                                              _unreadCounts.remove(chat['id']);
+                                            });
+                                          }
                                         },
                                       ),
                                       ListTile(
@@ -746,15 +661,14 @@ class _ChatsScreenState extends State<ChatsScreen> {
                     },
                   ),
             ),
-      floatingActionButton: FloatingActionButton(
-        backgroundColor: const Color(0xFF7474d6),
-        child: const Icon(Icons.search, color: Colors.white),
-        onPressed: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const SearchScreen()),
-          ).then((_) => _loadChats());
-        },
+      bottomNavigationBar: CustomNavigationBar(
+        currentIndex: _currentIndex,
+        onItemSelected: _onNavigationItemSelected,
+        showNavBar: true,
+        chats: _chats,
+        nickname: _nickname,
+        userId: _myUserId,
+        onReloadChats: _loadChats,
       ),
     );
   }
